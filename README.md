@@ -1,25 +1,23 @@
-# webm-pure
+# cassette
 
-A pure Common Lisp **WebM** stack: Matroska/EBML demuxer and muxer, a complete
-**VP8 video decoder** (key *and* inter frames, RFC 6386), and Opus audio via
-[`reed`](../reed).  No FFI.
+**Media containers in pure Common Lisp.** A Matroska/EBML (WebM) demuxer and muxer, and a
+pull-model player that hands out decoded pictures and audio in step.  No FFI.
 
-The intra half of VP8 — boolean decoder, coefficient tokens, intra prediction,
-IDCT/WHT, loop-filter kernels — is [`webp-pure`](../webp-pure)'s (a lossy WebP
-is one VP8 key frame).  This system adds everything a still image never
-needed: inter-frame headers, mode and motion-vector decoding, six-tap and
-bilinear motion compensation from bordered reference frames, golden/altref
-buffers, split motion vectors, per-macroblock loop-filter deltas, and
-probability persistence across frames.
+*A cassette is a shell that holds several tracks wound together and hands them back in
+step.*  That is what a container format is, and it is all this is.  The codecs are
+dependencies, not contents: [`reel`](../reel) decodes the video, [`reed`](../reed) the
+audio.  Which codec a track happens to carry is not something the shell around it knows.
 
-The encoder lives in [`webrtc-media`](../webrtc-media); this muxer wraps its
-frames into `.webm` files (see `inspect/test-encode-mux.lisp`).
+The VP8 decoder this was built around lives in `reel` now, together with the encoder
+that used to be in webrtc-media.  This repo kept the containers — which is the split
+that lets the muxer wrap reel's encoder output into a `.webm` without either of them
+knowing about the other (see `inspect/test-encode-mux.lisp`).
 
 ## Status
 
 | Piece | State |
 | ----- | ----- |
-| VP8 decoder | **Bit-exact with ffmpeg/libvpx** on the libvpx-encoded vectors (synthetic clips with alt-ref, 2/4 token partitions, error-resilient mode, split MVs) and on Big Buck Bunny 640x360. ~45 fps at 640x360 on one core. **Open:** the two W3C WPT clips (`wpt-test`, `wpt-circles`, an older encoder) differ slightly — ±1 on skipped ZEROMV macroblocks, larger on one B_PRED macroblock inside an inter frame; the partition parse stays in sync, so it is a reconstruction detail, not a desync. |
+| VP8 decoder (in `reel`, asserted here) | **Bit-exact with ffmpeg/libvpx** on the libvpx-encoded vectors (synthetic clips with alt-ref, 2/4 token partitions, error-resilient mode, split MVs) and on Big Buck Bunny 640x360. ~45 fps at 640x360 on one core. **Open:** the two W3C WPT clips (`wpt-test`, `wpt-circles`, an older encoder) differ slightly — ±1 on skipped ZEROMV macroblocks, larger on one B_PRED macroblock inside an inter frame; the partition parse stays in sync, so it is a reconstruction detail, not a desync. |
 | Demuxer | SimpleBlock and BlockGroup, Xiph/EBML/fixed lacing, header-stripping ContentEncoding, unknown-size Segment/Cluster, Cues via SeekHead, and `cluster-index` (a one-pass walk of cluster headers) for files without Cues. |
 | Muxer | Seekable output: SeekHead, Info, Tracks, Cues (before the clusters, fixed-width so offsets are known up front), SimpleBlocks, BlockGroup+DiscardPadding for Opus tails.  Round-trips ffmpeg-made files byte-for-byte at the frame level and ffmpeg decodes the result to identical pixels. |
 | Audio | Opus through `reed`.  Vorbis is demuxed but not decoded (video-only playback). |
@@ -29,14 +27,14 @@ frames into `.webm` files (see `inspect/test-encode-mux.lisp`).
 ## Playback
 
 ```lisp
-(asdf:load-system :webm-pure)
+(asdf:load-system :cassette)
 
-(let ((p (webm-pure:open-webm "movie.webm")))
-  (loop for pic = (webm-pure:next-video-frame p)
+(let ((p (cassette:open-webm "movie.webm")))
+  (loop for pic = (cassette:next-video-frame p)
         while pic
-        do (present (webm-pure:picture->rgb pic)          ; packed RGB, or :channels 4 for RGBA
-                    (webm-pure:picture-width pic) (webm-pure:picture-height pic)
-                    (webm-pure:picture-timestamp pic))))   ; seconds
+        do (present (cassette:picture->rgb pic)          ; packed RGB, or :channels 4 for RGBA
+                    (cassette:picture-width pic) (cassette:picture-height pic)
+                    (cassette:picture-timestamp pic))))   ; seconds
 ```
 
 `next-video-frame` returns the next *displayed* frame; hidden alt-ref frames
@@ -44,29 +42,29 @@ are decoded and skipped.  A `picture` shares its planes with the decoder's
 reference buffer and stays valid until the frame after the next one is
 decoded — copy it (`picture->rgb`, `picture->yuv420`) if you keep it longer.
 
-Audio: `(webm-pure:next-audio-frame p)` yields one decoded Opus packet as a
+Audio: `(cassette:next-audio-frame p)` yields one decoded Opus packet as a
 `reed:pcm` (48 kHz, interleaved 16-bit) plus its timestamp;
 `decode-all-audio` concatenates the whole track.
 
 Without a display, pipe raw frames to ffplay:
 
 ```sh
-sbcl --non-interactive --eval '(asdf:load-system :webm-pure)' \
-     --eval '(webm-pure:play-to-ffplay "movie.webm" :stream (sb-sys:make-fd-stream 1 :output t :element-type (quote (unsigned-byte 8))))' \
+sbcl --non-interactive --eval '(asdf:load-system :cassette)' \
+     --eval '(cassette:play-to-ffplay "movie.webm" :stream (sb-sys:make-fd-stream 1 :output t :element-type (quote (unsigned-byte 8))))' \
   | ffplay -f rawvideo -pixel_format yuv420p -video_size 640x360 -framerate 30 -
 ```
 
 ## Muxing
 
 ```lisp
-(let* ((mx (webm-pure:make-muxer))                        ; 1 ms timecode ticks
-       (v (webm-pure:add-video-track mx :width 640 :height 360 :frame-rate 30))
-       (a (webm-pure:add-audio-track mx :sample-rate 48000 :channels 2
+(let* ((mx (cassette:make-muxer))                        ; 1 ms timecode ticks
+       (v (cassette:add-video-track mx :width 640 :height 360 :frame-rate 30))
+       (a (cassette:add-audio-track mx :sample-rate 48000 :channels 2
                                         :codec-private opus-head :codec-delay 6500000 :seek-pre-roll 80000000)))
-  (webm-pure:add-frame mx v 0 keyframe-octets :keyframe t)
-  (webm-pure:add-frame mx v 33333333 inter-octets)
-  (webm-pure:add-frame mx a 0 opus-packet)
-  (webm-pure:write-webm-file mx "out.webm"))
+  (cassette:add-frame mx v 0 keyframe-octets :keyframe t)
+  (cassette:add-frame mx v 33333333 inter-octets)
+  (cassette:add-frame mx a 0 opus-packet)
+  (cassette:write-webm-file mx "out.webm"))
 ```
 
 Timestamps are nanoseconds.  Frames may be added in any order; they are sorted
@@ -75,11 +73,11 @@ and grouped into clusters (a new one at each video key frame after ~5 s).
 ## Demuxing only
 
 ```lisp
-(let ((w (webm-pure:parse-webm (webm-pure::slurp-file "movie.webm"))))
-  (webm-pure:webm-tracks w)                    ; TRACK structs: codec-id, width/height, sample-rate, codec-private ...
-  (webm-pure:map-frames (lambda (f) (list (webm-pure:frame-timecode f) (webm-pure:frame-keyframe-p f)
-                                          (length (webm-pure:frame-data f))))
-                        w :track (webm-pure:webm-video-track w)))
+(let ((w (cassette:parse-webm (cassette::slurp-file "movie.webm"))))
+  (cassette:webm-tracks w)                    ; TRACK structs: codec-id, width/height, sample-rate, codec-private ...
+  (cassette:map-frames (lambda (f) (list (cassette:frame-timecode f) (cassette:frame-keyframe-p f)
+                                          (length (cassette:frame-data f))))
+                        w :track (cassette:webm-video-track w)))
 ```
 
 ## Tests

@@ -1,7 +1,7 @@
 ;;;; ebml.lisp — EBML (RFC 8794) primitives: variable-length integers,
 ;;;; element headers, and a small writer.  Matroska/WebM is EBML with a
 ;;;; specific element vocabulary (see demux.lisp / mux.lisp).
-(in-package #:webm-pure)
+(in-package #:cassette)
 
 ;;; ---- reading ------------------------------------------------------------
 

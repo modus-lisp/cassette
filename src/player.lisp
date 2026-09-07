@@ -1,7 +1,7 @@
 ;;;; player.lisp — pull-model playback: a demuxer cursor feeding a VP8
 ;;;; decoder for video and reed's Opus decoder for audio.  Nothing here
 ;;;; touches a device; a caller pulls frames and paces them itself.
-(in-package #:webm-pure)
+(in-package #:cassette)
 
 (defstruct (webm-player (:conc-name player-))
   webm
@@ -27,7 +27,7 @@
       (setf at nil))                            ; other audio codecs: video only
     (make-webm-player :webm w :video-track vt :audio-track at
                       :reader (make-block-reader w)
-                      :vp8 (and vt (make-vp8-decoder))
+                      :vp8 (and vt (make-decoder))
                       :opus (and at (reed:make-opus-decoder
                                      :channels (track-channels at))))))
 
@@ -91,7 +91,7 @@
         (when (player-need-key p)
           (if (frame-keyframe-p f) (setf (player-need-key p) nil) (return-from skip)))
         (multiple-value-bind (pic shown)
-            (vp8-decode-frame (player-vp8 p) (frame-data f) :timestamp (frame-timestamp f scale))
+            (decode-frame (player-vp8 p) (frame-data f) :timestamp (frame-timestamp f scale))
           (when (and shown pic (not (frame-invisible-p f)))
             (return-from next-video-frame pic))))))))
 

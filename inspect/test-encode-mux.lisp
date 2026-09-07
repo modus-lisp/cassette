@@ -1,11 +1,10 @@
-;;;; test-encode-mux.lisp — the whole pure-CL chain: webrtc-media's VP8 encoder
+;;;; test-encode-mux.lisp — the whole pure-CL chain: reel's VP8 encoder
 ;;;; -> webm-pure muxer -> .webm file -> ffprobe/ffmpeg accept it, and both
 ;;;; ffmpeg and webm-pure's decoder reconstruct the same pixels from it.
 ;;;;   run:  sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-encode-mux.lisp
 (require :asdf)
 (push (truename "./") asdf:*central-registry*)
-(push (truename "../webrtc-media/") asdf:*central-registry*)
-(handler-case (progn (asdf:load-system :webm-pure) (asdf:load-system :webrtc-media))
+(handler-case (progn (asdf:load-system :cassette) (asdf:load-system :reel))
   (error (e) (format t "~&LOAD-ERR ~a~%" e) (sb-ext:exit :code 1)))
 
 (defun sh (fmt &rest args)
@@ -56,13 +55,13 @@
     (nreverse frames)))
 
 (let* ((frames (encode-sequence))
-       (mx (webm-pure:make-muxer))
-       (tn (webm-pure:add-video-track mx :width *w* :height *h* :frame-rate *fps*))
+       (mx (cassette:make-muxer))
+       (tn (cassette:add-video-track mx :width *w* :height *h* :frame-rate *fps*))
        (out "/tmp/lisp-encoded.webm"))
   (loop for f in frames for i from 0
-        do (webm-pure:add-frame mx tn (round (* i 1000000000) *fps*) f
-                                :keyframe (webm-pure:vp8-frame-info f)))
-  (webm-pure:write-webm-file mx out)
+        do (cassette:add-frame mx tn (round (* i 1000000000) *fps*) f
+                                :keyframe (cassette:frame-info f)))
+  (cassette:write-webm-file mx out)
   (format t "~&encoded ~d frames, ~d bytes total, wrote ~a~%"
           (length frames) (reduce #'+ frames :key #'length) out)
   ;; ffmpeg's view of the file
@@ -70,19 +69,19 @@
           (sh "ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames -count_frames -of csv=p=0 ~a" out))
   (sh "ffmpeg -v error -y -i ~a -f rawvideo -pix_fmt yuv420p /tmp/lisp-encoded.yuv" out)
   ;; our decoder vs ffmpeg
-  (let* ((oracle (webm-pure::slurp-file "/tmp/lisp-encoded.yuv"))
-         (p (webm-pure:open-webm out))
+  (let* ((oracle (cassette::slurp-file "/tmp/lisp-encoded.yuv"))
+         (p (cassette:open-webm out))
          (fb (+ (* *w* *h*) (* 2 (ceiling *w* 2) (ceiling *h* 2))))
          (n (floor (length oracle) fb))
          (exact 0))
     (dotimes (i n)
-      (let ((pic (webm-pure:next-video-frame p)))
-        (when (and pic (equalp (webm-pure:picture->yuv420 pic) (subseq oracle (* i fb) (* (1+ i) fb))))
+      (let ((pic (cassette:next-video-frame p)))
+        (when (and pic (equalp (cassette:picture->yuv420 pic) (subseq oracle (* i fb) (* (1+ i) fb))))
           (incf exact))))
     (format t "~&decoded: ffmpeg=~d frames, webm-pure bit-exact on ~d~%" n exact)
-    (webm-pure:write-ppm (progn (setf p (webm-pure:open-webm out))
-                                (loop repeat 12 do (webm-pure:next-video-frame p))
-                                (webm-pure:next-video-frame p))
+    (cassette:write-ppm (progn (setf p (cassette:open-webm out))
+                                (loop repeat 12 do (cassette:next-video-frame p))
+                                (cassette:next-video-frame p))
                          "/tmp/lisp-encoded-0012.ppm")
     (let ((ok (and (= n *frames*) (= exact n))))
       (format t "~&~a~%" (if ok "ENCODE->MUX->DECODE OK" "ENCODE CHAIN PROBLEM"))

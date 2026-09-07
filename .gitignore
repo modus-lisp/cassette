@@ -3,3 +3,5 @@ vectors/*.yuv
 # scratch
 *.fasl
 /tmp/
+vectors/bbb360-with-audio.webm
+vectors/tone-sweep-440-880.mp3

@@ -2,7 +2,7 @@
 ;;;; Info and Tracks eagerly, then hands out frames lazily from Clusters
 ;;;; (SimpleBlock and BlockGroup, all four lacing modes, header-stripping
 ;;;; ContentEncoding).  Unknown-size Segments and Clusters (live streams) work.
-(in-package #:webm-pure)
+(in-package #:cassette)
 
 ;;; ---- element IDs ---------------------------------------------------------
 

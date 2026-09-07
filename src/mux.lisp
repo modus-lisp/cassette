@@ -2,7 +2,7 @@
 ;;;; file: EBML header, Segment { SeekHead, Info, Tracks, Cues, Cluster* }.
 ;;;; Cues precede the clusters and use fixed-width integers, so cluster
 ;;;; offsets are known before anything is emitted.
-(in-package #:webm-pure)
+(in-package #:cassette)
 
 (defstruct (mux-track (:conc-name mt-))
   number type codec-id codec-private
@@ -16,7 +16,7 @@
   (timecode-scale 1000000)                      ; 1 ms ticks
   (cluster-limit-ns 5000000000)                 ; start a new cluster at least this often
   (title nil)
-  (writing-app "webm-pure"))
+  (writing-app "cassette"))
 
 (defun add-video-track (mx &key (codec-id "V_VP8") width height display-width display-height
                                  frame-rate codec-private name (language "und"))
@@ -71,7 +71,7 @@
                (el-uint +id-timecode-scale+ (mx-timecode-scale mx))
                (and duration-ticks (el-float +id-duration+ duration-ticks))
                (and (mx-title mx) (el-string +id-title+ (mx-title mx)))
-               (el-string +id-muxing-app+ "webm-pure")
+               (el-string +id-muxing-app+ "cassette")
                (el-string +id-writing-app+ (mx-writing-app mx))))
 
 (defun track-entry-element (tr)
