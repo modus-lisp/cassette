@@ -110,3 +110,9 @@ done
 for f in bt-r3 bs-r3 bt-r1 b-hard; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# Big Buck Bunny as all-intra H.264, if you want a longer real-motion clip to eyeball in a player.
+# Nothing in the test suite uses it, which is why it is not in the repository: at 14 MB it would be
+# most of the clone.
+#   ffmpeg -i BBB.webm -t 8 -s 640x360 -pix_fmt yuv420p -c:v libx264 -profile:v baseline -g 1 \
+#          -qp 24 -an bbb-h264.mp4

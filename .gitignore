@@ -5,3 +5,6 @@ vectors/*.yuv
 /tmp/
 vectors/bbb360-with-audio.webm
 vectors/tone-sweep-440-880.mp3
+
+# a 14 MB clip nothing references; regen.sh has the recipe if you want it back
+vectors/bbb-h264.mp4
