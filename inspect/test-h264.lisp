@@ -130,7 +130,10 @@
                 ("b-ref3" . "three reference pictures")
                 ("b-sub" . "every partition size")
                 ("b-wb" . "implicit weighted bi-prediction")
-                ("b-mix" . "a scene cut: intra in B slices, mixed partition modes")))
+                ("b-mix" . "a scene cut: intra in B slices, mixed partition modes")
+                ("bt-r3" . "temporal direct with three reference pictures")
+                ("bs-r3" . "spatial direct with three reference pictures")
+                ("bt-r1" . "temporal direct with one reference picture")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
