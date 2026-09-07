@@ -116,3 +116,15 @@ done
 # most of the clone.
 #   ffmpeg -i BBB.webm -t 8 -s 640x360 -pix_fmt yuv420p -c:v libx264 -profile:v baseline -g 1 \
 #          -qp 24 -an bbb-h264.mp4
+
+# High profile.  hp-plain uses neither the 8x8 transform nor scaling lists, so it decodes with no
+# High-specific code at all — it is the fixture that proves the refusal tests the FLAG and not the
+# profile.  hp-cqm carries the default scaling matrices.  hp-8x8 and hp-8x8c need the 8x8 transform
+# and are still refused.
+#   H="b-adapt=0:bframes=0:ref=1:weightp=0"
+#   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v high \
+#          -x264-params "$H:8x8dct=0:cqm=flat:cabac=1" -qp 24 -bsf:v h264_mp4toannexb -f h264 hp-plain.h264
+#   ...hp-cqm with 8x8dct=0:cqm=jvt, hp-8x8 with 8x8dct=1:cqm=flat, hp-8x8c the same with cabac=0
+for f in hp-plain hp-cqm hp-8x8 hp-8x8c; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done

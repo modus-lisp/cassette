@@ -135,7 +135,9 @@
                 ("bs-r3" . "spatial direct with three reference pictures")
                 ("bt-r1" . "temporal direct with one reference picture")
                 ("b-hard" . "everything at once: weighting, three refs, all partitions")
-                ("k-nopart" . "a coded direct macroblock beside one coding a reference index")))
+                ("k-nopart" . "a coded direct macroblock beside one coding a reference index")
+                ("hp-plain" . "High profile using neither the 8x8 transform nor scaling lists")
+                ("hp-cqm" . "High profile with the default scaling matrices")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
