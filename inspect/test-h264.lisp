@@ -50,6 +50,34 @@
                   (and (plusp n) (= exact n))))))
     (error (e) (ok (format nil "~a: ~a" name e) nil))))
 
+(format t "~&== CABAC: the arithmetic decoder, against ffmpeg~%")
+;; CABAC has no partial credit.  A wrong context index feeds the wrong probability to the
+;; arithmetic decoder, which returns the wrong bin, and every symbol after it in the slice is
+;; garbage — so these either match exactly or fail completely, and a near miss is not a thing.
+;; Spread across quantisers because the coefficient contexts are where the detail lives.
+(dolist (spec '(("cabac-intra" . "qp 26, synthetic")
+                ("cabac-fine" . "qp 12, almost lossless")
+                ("cabac-mandel" . "qp 34, coarse, detailed")
+                ("cabac-big" . "qp 18, 320x240")))
+  (destructuring-bind (name . what) spec
+    (handler-case
+        (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
+                                               :threads 1))
+               (oracle (slurp (format nil "vectors/~a.yuv" name))))
+          (if (null pics)
+              (ok (format nil "~a: decoded no pictures" name) nil)
+              (let* ((fb (length (reel.h264:picture->yuv420 (first pics))))
+                     (n (min (length pics) (floor (length oracle) fb)))
+                     (exact 0))
+                (dotimes (i n)
+                  (let ((y (reel.h264:picture->yuv420 (nth i pics))) (off (* i fb)) (bad 0))
+                    (dotimes (k fb)
+                      (unless (= (aref y k) (aref oracle (+ off k))) (incf bad)))
+                    (when (zerop bad) (incf exact))))
+                (ok (format nil "~a (~a): ~d frames, ~d bit-exact" name what n exact)
+                    (and (plusp n) (= exact n))))))
+      (error (e) (ok (format nil "~a: ~a" name e) nil)))))
+
 (format t "~&== P slices: motion compensation, against ffmpeg~%")
 ;; Inter prediction has failure modes that do not desynchronise the bitstream — a wrong predicted
 ;; vector, a wrong interpolation position, a wrong boundary strength — so these compare every
