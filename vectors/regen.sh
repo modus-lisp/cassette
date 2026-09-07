@@ -99,3 +99,14 @@ done
 for f in b-spat b-temp b-cabac; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# The reproduction for the one known decoder bug: temporal direct prediction combined with more
+# than one reference picture.  Neither alone is enough, which is why there are three of them.
+#   B="b-adapt=0:bframes=2:b-pyramid=none:cabac=1:partitions=none:weightp=0:weightb=0"
+#   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v main \
+#          -x264-params "$B:direct=temporal:ref=3" -qp 24 -bsf:v h264_mp4toannexb -f h264 bt-r3.h264
+#   ...bs-r3 with direct=spatial:ref=3, bt-r1 with direct=temporal:ref=1
+# b-hard is the same fault with everything else on too, where it desynchronises outright.
+for f in bt-r3 bs-r3 bt-r1 b-hard; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
