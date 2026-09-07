@@ -64,3 +64,18 @@ done
 #          -c:a aac -b:a 64k -shortest cabac-av.mp4
 #   ffmpeg -f lavfi -i "testsrc2=size=96x64:rate=10:duration=1" -c:v libx264 -profile:v main -g 1 \
 #          -x264-params "bframes=0:cabac=1" -qp 26 -bsf:v h264_mp4toannexb -f h264 cabac-intra.h264
+
+# CABAC fixtures (Main profile).  Intra ones span the quantiser range because the coefficient
+# contexts are where CABAC's detail lives; the P ones exist because multiple references and
+# sub-8x8 partitions each worked alone and broke together — a partition's reference index takes
+# its context from the partition beside it, whose index is read earlier in the same macroblock.
+#   M="bframes=0:cabac=1"
+#   ffmpeg -f lavfi -i "testsrc2=size=96x64:rate=10:duration=1"   -pix_fmt yuv420p -c:v libx264 -profile:v main -g 1 -x264-params "$M" -qp 26 -bsf:v h264_mp4toannexb -f h264 cabac-intra.h264
+#   ...cabac-fine qp 12, cabac-big 320x240 qp 18, cabac-mandel mandelbrot 176x144 qp 34, all with -g 1
+#   ffmpeg -f lavfi -i "testsrc2=size=96x64:rate=10:duration=1"   -pix_fmt yuv420p -c:v libx264 -profile:v main -x264-params "$M:ref=1:weightp=0" -qp 26 -bsf:v h264_mp4toannexb -f h264 cabac-p.h264
+#   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v main -x264-params "$M:weightp=0:ref=3:partitions=none" -qp 24 -bsf:v h264_mp4toannexb -f h264 c-m3ref.h264
+#   ...c-m1ref with ref=1, c-mall with ref=3:partitions=all:subme=7
+#   ffmpeg -i BBB.webm -t 2 -pix_fmt yuv420p -c:v libx264 -profile:v main -x264-params "$M:ref=3:weightp=0:subme=7:partitions=all" -qp 24 -bsf:v h264_mp4toannexb -f h264 cabac-pbbb.h264
+for f in cabac-intra cabac-fine cabac-big cabac-mandel cabac-p cabac-pbbb c-m1ref c-m3ref c-mall c-3ref c-p4x4 c-i4x4; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done

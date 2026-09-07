@@ -55,10 +55,14 @@
 ;; arithmetic decoder, which returns the wrong bin, and every symbol after it in the slice is
 ;; garbage — so these either match exactly or fail completely, and a near miss is not a thing.
 ;; Spread across quantisers because the coefficient contexts are where the detail lives.
-(dolist (spec '(("cabac-intra" . "qp 26, synthetic")
-                ("cabac-fine" . "qp 12, almost lossless")
-                ("cabac-mandel" . "qp 34, coarse, detailed")
-                ("cabac-big" . "qp 18, 320x240")))
+(dolist (spec '(("cabac-intra" . "intra, qp 26, synthetic")
+                ("cabac-fine" . "intra, qp 12, almost lossless")
+                ("cabac-mandel" . "intra, qp 34, coarse, detailed")
+                ("cabac-big" . "intra, qp 18, 320x240")
+                ("cabac-p" . "P slices, one reference")
+                ("c-m3ref" . "P slices, three references")
+                ("c-mall" . "P slices, three references and every partition size")
+                ("cabac-pbbb" . "real motion, 60 frames, everything at once")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
