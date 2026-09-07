@@ -1,7 +1,8 @@
 # cassette
 
-**Media containers in pure Common Lisp.** A Matroska/EBML (WebM) demuxer and muxer, and a
-pull-model player that hands out decoded pictures and audio in step.  No FFI.
+**Media containers in pure Common Lisp.** Matroska/EBML (WebM) and ISO base media (MP4, M4A,
+MOV) demuxers, a WebM muxer, and a pull-model player that hands out decoded pictures and audio
+in step.  No FFI.
 
 *A cassette is a shell that holds several tracks wound together and hands them back in
 step.*  That is what a container format is, and it is all this is.  The codecs are
@@ -18,18 +19,20 @@ knowing about the other (see `inspect/test-encode-mux.lisp`).
 | Piece | State |
 | ----- | ----- |
 | VP8 decoder (in `reel`, asserted here) | **Bit-exact with ffmpeg/libvpx** on the libvpx-encoded vectors (synthetic clips with alt-ref, 2/4 token partitions, error-resilient mode, split MVs) and on Big Buck Bunny 640x360. ~45 fps at 640x360 on one core. **Open:** the two W3C WPT clips (`wpt-test`, `wpt-circles`, an older encoder) differ slightly — ±1 on skipped ZEROMV macroblocks, larger on one B_PRED macroblock inside an inter frame; the partition parse stays in sync, so it is a reconstruction detail, not a desync. |
-| Demuxer | SimpleBlock and BlockGroup, Xiph/EBML/fixed lacing, header-stripping ContentEncoding, unknown-size Segment/Cluster, Cues via SeekHead, and `cluster-index` (a one-pass walk of cluster headers) for files without Cues. |
+| WebM demuxer | SimpleBlock and BlockGroup, Xiph/EBML/fixed lacing, header-stripping ContentEncoding, unknown-size Segment/Cluster, Cues via SeekHead, and `cluster-index` (a one-pass walk of cluster headers) for files without Cues. |
+| MP4 demuxer | `moov` sample tables (`stsz`/`stz2`, `stco`/`co64`, `stsc`, `stts`, `ctts`, `stss`), fragmented files (`moof`/`traf`/`trun`/`tfdt`, `trex` defaults), edit lists, `avcC`/`esds`/`dOps` codec configuration. **Every packet matches ffprobe** — size, presentation time to the microsecond, and sync flag — across four container shapes including B-frames and fragmentation. Seeking is a binary search of the sync samples. |
 | Muxer | Seekable output: SeekHead, Info, Tracks, Cues (before the clusters, fixed-width so offsets are known up front), SimpleBlocks, BlockGroup+DiscardPadding for Opus tails.  Round-trips ffmpeg-made files byte-for-byte at the frame level and ffmpeg decodes the result to identical pixels. |
 | Audio | Opus through `reed`.  Vorbis is demuxed but not decoded (video-only playback). |
 | Seeking | `seek-webm` repositions at the cluster at or before a time and hands out the next key frame first; a caller wanting the exact frame decodes forward from there (warp's media player does). |
-| Not done | VP9/AV1, Vorbis, A/V pacing (the player is pull-model; the caller paces — see `warp-media` for a paced player on top of this). |
+| Codecs | Video is [`reel`](../reel)'s: VP8 only. **An MP4 is usually H.264, which reel does not decode** — such a file opens anyway, names the codec in `player-unsupported`, and plays whatever else it has. Audio is [`reed`](../reed)'s: Opus per packet here; AAC through reed's own MP4 reader. |
+| Not done | H.264/VP9/AV1 decoding, Vorbis, an MP4 muxer, A/V pacing (the player is pull-model; the caller paces — see `warp-media` for a paced player on top of this). |
 
 ## Playback
 
 ```lisp
 (asdf:load-system :cassette)
 
-(let ((p (cassette:open-webm "movie.webm")))
+(let ((p (cassette:open-media "movie.webm")))          ; or "movie.mp4" — it sniffs
   (loop for pic = (cassette:next-video-frame p)
         while pic
         do (present (cassette:picture->rgb pic)          ; packed RGB, or :channels 4 for RGBA
@@ -86,6 +89,7 @@ All tests compare against ffmpeg (needed on `PATH`):
 
 ```sh
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-decode.lisp      # bit-exact YUV vs ffmpeg, all vectors
+sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-mp4.lisp         # every MP4 packet vs ffprobe
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-mux.lisp         # demux -> remux -> ffprobe / ffmpeg md5
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-encode-mux.lisp  # webrtc-media encoder -> mux -> both decoders agree
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/dump-frame.lisp FILE.webm /tmp/out 0 45  # PPM dumps

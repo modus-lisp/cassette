@@ -1,10 +1,23 @@
-;;;; player.lisp — pull-model playback: a demuxer cursor feeding a VP8
+;;;; player.lisp — pull-model playback: a demuxer cursor feeding reel's VP8
 ;;;; decoder for video and reed's Opus decoder for audio.  Nothing here
 ;;;; touches a device; a caller pulls frames and paces them itself.
+;;;;
+;;;; BOTH CONTAINERS, ONE PLAYER.  The two demuxers hand back the same TRACK and BLOCK-FRAME
+;;;; structs, so what differs here is three lines: which reader to advance, how many nanoseconds
+;;;; a timecode tick is, and how to seek.  OPEN-MEDIA sniffs and the rest of this file does not
+;;;; ask again.
+;;;;
+;;;; A CODEC THIS IMAGE CANNOT DECODE IS NOT AN ERROR.  An MP4 is usually H.264, which reel does
+;;;; not decode; refusing to open the file would also refuse its audio, which is decodable and is
+;;;; most of what a person wants from a file they cannot watch.  So an undecodable track is
+;;;; reported — PLAYER-UNSUPPORTED says which codec it was — and the other track still plays.
 (in-package #:cassette)
 
 (defstruct (webm-player (:conc-name player-))
-  webm
+  (kind :webm)                                  ; :webm or :mp4
+  webm                                          ; the WEBM or MP4 container struct
+  (tick 1000000)                                ; nanoseconds per BLOCK-FRAME timecode tick
+  unsupported                                   ; (codec-id ...) present but not decodable here
   video-track audio-track
   reader                                        ; block reader over the whole stream
   vp8                                           ; VP8-DECODER or NIL
@@ -14,22 +27,48 @@
   (need-key nil)                                ; after a seek: skip to the next key frame
   (eof nil))
 
-(defun open-webm (source &key (audio t))
-  "Open a WebM from SOURCE (a pathname/namestring or an octet vector).
-   Returns a WEBM-PLAYER.  Signals WEBM-ERROR when the video codec is not VP8."
+(defun %decodable-video-p (codec) (equal codec "V_VP8"))
+(defun %decodable-audio-p (codec) (equal codec "A_OPUS"))
+
+(defun open-media (source &key (audio t))
+  "Open a WebM or an MP4 from SOURCE (a pathname, a namestring, or an octet vector), whichever
+   it turns out to be.  Returns a WEBM-PLAYER over either.
+
+   Tracks whose codec this image cannot decode are left out of VIDEO-TRACK / AUDIO-TRACK and
+   named in PLAYER-UNSUPPORTED instead, so a file that is half playable plays half."
   (let* ((bytes (if (or (stringp source) (pathnamep source)) (slurp-file source) source))
-         (w (parse-webm bytes))
-         (vt (webm-video-track w))
-         (at (and audio (webm-audio-track w))))
-    (when (and vt (not (string= (track-codec-id vt) "V_VP8")))
-      (%err "video codec ~a is not supported (only V_VP8)" (track-codec-id vt)))
-    (when (and at (not (string= (track-codec-id at) "A_OPUS")))
-      (setf at nil))                            ; other audio codecs: video only
-    (make-webm-player :webm w :video-track vt :audio-track at
-                      :reader (make-block-reader w)
-                      :vp8 (and vt (make-decoder))
-                      :opus (and at (reed:make-opus-decoder
-                                     :channels (track-channels at))))))
+         (mp4p (and (not (webm-p bytes)) (mp4-p bytes))))
+    (unless (or mp4p (webm-p bytes))
+      (%err "not a WebM or MP4 file"))
+    (let* ((c (if mp4p (parse-mp4 bytes) (parse-webm bytes)))
+           (vt (if mp4p (mp4-video-track c) (webm-video-track c)))
+           (at (and audio (if mp4p (mp4-audio-track c) (webm-audio-track c))))
+           (unsupported '()))
+      (when (and vt (not (%decodable-video-p (track-codec-id vt))))
+        (push (track-codec-id vt) unsupported)
+        (setf vt nil))
+      (when (and at (not (%decodable-audio-p (track-codec-id at))))
+        (push (track-codec-id at) unsupported)
+        (setf at nil))
+      (make-webm-player
+       :kind (if mp4p :mp4 :webm)
+       :webm c
+       :tick (if mp4p +mp4-tick+ (webm-timecode-scale c))
+       :unsupported (nreverse unsupported)
+       :video-track vt :audio-track at
+       :reader (if mp4p (make-mp4-reader c) (make-block-reader c))
+       :vp8 (and vt (make-decoder))
+       :opus (and at (reed:make-opus-decoder :channels (track-channels at)))))))
+
+(defun open-webm (source &key (audio t))
+  "OPEN-MEDIA, kept under the name it had when this repo only read one container."
+  (open-media source :audio audio))
+
+(defun %advance-reader (p)
+  "The next frame from whichever demuxer this player is holding."
+  (if (eq (player-kind p) :mp4)
+      (read-next-mp4-frame (player-reader p))
+      (read-next-frame (player-reader p))))
 
 (defun player-eof-p (p) (player-eof p))
 
@@ -54,13 +93,26 @@
 
 (defun player-duration (p)
   "Duration in seconds (double) or NIL."
-  (let ((w (player-webm p)))
-    (and (webm-duration w) (/ (* (webm-duration w) (webm-timecode-scale w)) 1d9))))
+  (let ((c (player-webm p)))
+    (if (eq (player-kind p) :mp4)
+        (mp4-duration c)
+        (and (webm-duration c) (/ (* (webm-duration c) (webm-timecode-scale c)) 1d9)))))
 
 (defun player-frame-rate (p)
   "Nominal video frame rate from DefaultDuration, or NIL."
   (let ((vt (player-video-track p)))
     (and vt (track-default-duration vt) (/ 1d9 (track-default-duration vt)))))
+
+(defun seek-media (p seconds)
+  "Reposition at or before SECONDS, whichever container this is.  Returns the timestamp actually
+   landed on, in seconds."
+  (if (eq (player-kind p) :mp4)
+      (multiple-value-bind (r landed) (seek-mp4 (player-webm p) seconds)
+        (setf (player-reader p) r
+              (player-pending-audio p) '() (player-pending-video p) '()
+              (player-eof p) nil (player-need-key p) t)
+        landed)
+      (seek-webm p seconds)))
 
 (defun %next-frame-for (p track)
   "Next demuxed frame of TRACK, queueing frames of the other track."
@@ -70,7 +122,7 @@
                           ((eq track at) (pop (player-pending-audio p))))))
         (when queued (return queued)))
       (when (player-eof p) (return nil))
-      (let ((f (read-next-frame (player-reader p))))
+      (let ((f (%advance-reader p)))
         (cond ((null f) (setf (player-eof p) t) (return nil))
               ((eq (frame-track f) track) (return f))
               ((and at (eq (frame-track f) at))
@@ -82,7 +134,7 @@
   "Decode and return the next *displayed* video PICTURE (timestamp set in
    seconds), or NIL at end of stream.  Hidden frames (altref) are decoded
    and skipped."
-  (let ((vt (player-video-track p)) (scale (webm-timecode-scale (player-webm p))))
+  (let ((vt (player-video-track p)) (scale (player-tick p)))
     (unless vt (return-from next-video-frame nil))
     (loop
      (block skip
@@ -98,7 +150,7 @@
 (defun next-audio-frame (p)
   "Decode the next Opus packet.  Returns (values pcm timestamp-seconds) where
    PCM is a reed PCM struct (16-bit interleaved, 48 kHz), or NIL at end."
-  (let ((at (player-audio-track p)) (scale (webm-timecode-scale (player-webm p))))
+  (let ((at (player-audio-track p)) (scale (player-tick p)))
     (unless at (return-from next-audio-frame nil))
     (let ((f (%next-frame-for p at)))
       (when f

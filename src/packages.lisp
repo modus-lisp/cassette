@@ -12,7 +12,7 @@
    #:picture-timestamp #:picture->rgb #:picture->rgb-into #:picture->yuv420)
   (:export
    ;; conditions
-   #:webm-error #:webm-error-message
+   #:cassette-error #:cassette-error-message
    ;; EBML primitives (exported for tooling / tests)
    #:read-vint #:read-element-header #:write-vint #:write-element #:ebml-element #:ebml-uint
    #:ebml-sint #:ebml-float #:ebml-string #:ebml-binary #:ebml-master
@@ -27,6 +27,11 @@
    #:block-frame #:block-frame-p #:frame-track #:frame-timecode #:frame-timestamp
    #:frame-data #:frame-keyframe-p #:frame-invisible-p #:frame-duration #:frame-discard-padding
    #:make-block-reader #:read-next-frame #:map-frames #:collect-frames #:cluster-index #:webm-cues
+   ;; MP4 / ISO base media
+   #:parse-mp4 #:mp4 #:mp4-p #:mp4-brand #:mp4-duration #:mp4-tracks #:mp4-track
+   #:mp4-video-track #:mp4-audio-track #:mp4-fragmented #:mp4-bytes
+   #:make-mp4-reader #:read-next-mp4-frame #:seek-mp4 #:mp4-sync-sample-before
+   #:sample-table #:st-count #:st-timescale #:st-time-seconds #:st-sync
    ;; muxer
    #:make-muxer #:add-video-track #:add-audio-track #:add-frame #:finish-webm
    #:write-webm-file #:muxer
@@ -36,18 +41,18 @@
    #:picture-y-stride #:picture-uv-stride #:picture-y-offset #:picture-uv-offset
    #:picture-timestamp #:picture->rgb #:picture->rgb-into #:picture->yuv420
    ;; player
-   #:open-webm #:webm-player #:next-video-frame #:next-audio-frame #:player-video-track
+   #:open-media #:open-webm #:seek-media #:player-kind #:player-tick #:player-unsupported #:webm-player #:next-video-frame #:next-audio-frame #:player-video-track
    #:player-audio-track #:player-webm #:player-duration #:player-frame-rate
    #:decode-all-audio #:write-ppm #:play-to-ffplay #:seek-webm #:player-eof-p))
 
 (in-package #:cassette)
 
-(define-condition webm-error (error)
-  ((message :initarg :message :reader webm-error-message))
-  (:report (lambda (c s) (format s "cassette: ~a" (webm-error-message c)))))
+(define-condition cassette-error (error)
+  ((message :initarg :message :reader cassette-error-message))
+  (:report (lambda (c s) (format s "cassette: ~a" (cassette-error-message c)))))
 
 (defun %err (fmt &rest args)
-  (error 'webm-error :message (apply #'format nil fmt args)))
+  (error 'cassette-error :message (apply #'format nil fmt args)))
 
 (deftype octets () '(simple-array (unsigned-byte 8) (*)))
 

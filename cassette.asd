@@ -16,5 +16,6 @@ on the frame asked for.  Video decoding is reel's, audio is reed's.  No FFI."
                 :components ((:file "packages")
                              (:file "ebml")
                              (:file "demux")
+                             (:file "mp4")
                              (:file "mux")
                              (:file "player")))))
