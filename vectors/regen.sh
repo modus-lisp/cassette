@@ -79,3 +79,12 @@ done
 for f in cabac-intra cabac-fine cabac-big cabac-mandel cabac-p cabac-pbbb c-m1ref c-m3ref c-mall c-3ref c-p4x4 c-i4x4; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# Weighted prediction, which also forces reference list reordering: x264 puts the same picture in
+# the list twice at different weights, so the list is longer than the number of distinct pictures.
+#   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v main \
+#          -x264-params "bframes=0:cabac=1:weightp=2:ref=3:partitions=all" -qp 24 \
+#          -bsf:v h264_mp4toannexb -f h264 w-cabac.h264      (and cabac=0 for w-cavlc)
+for f in w-cabac w-cavlc; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done

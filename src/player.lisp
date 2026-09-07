@@ -18,6 +18,7 @@
   webm                                          ; the WEBM or MP4 container struct
   (tick 1000000)                                ; nanoseconds per BLOCK-FRAME timecode tick
   unsupported                                   ; (codec-id ...) present but not decodable here
+  video-note                                    ; why the video track was refused, if it was
   video-track audio-track
   reader                                        ; block reader over the whole stream
   vp8                                           ; reel VP8 decoder, or NIL
@@ -49,10 +50,20 @@
     (let* ((c (if mp4p (parse-mp4 bytes) (parse-webm bytes)))
            (vt (if mp4p (mp4-video-track c) (webm-video-track c)))
            (at (and audio (if mp4p (mp4-audio-track c) (webm-audio-track c))))
-           (unsupported '()))
+           (unsupported '()) (note nil) (h264 nil))
       (when (and vt (not (%decodable-video-p (track-codec-id vt))))
         (push (track-codec-id vt) unsupported)
+        (setf note (format nil "~a is not a codec this decodes" (track-codec-id vt)))
         (setf vt nil))
+      ;; An H.264 track whose parameter sets will not parse — ten-bit, 4:2:2, a High profile
+      ;; feature — is undecodable too, and it is worth finding that out HERE.  The parameter sets
+      ;; are read when the file is opened, so letting that error escape fails the whole file and
+      ;; takes the audio with it, which is the one thing this player is supposed not to do.
+      (when (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/AVC"))
+        (handler-case (setf h264 (%make-h264 vt))
+          (error (e)
+            (push (track-codec-id vt) unsupported)
+            (setf note (princ-to-string e) vt nil h264 nil))))
       (when (and at (not (%decodable-audio-p (track-codec-id at))))
         (push (track-codec-id at) unsupported)
         (setf at nil))
@@ -61,10 +72,11 @@
        :webm c
        :tick (if mp4p +mp4-tick+ (webm-timecode-scale c))
        :unsupported (nreverse unsupported)
+       :video-note note
        :video-track vt :audio-track at
        :reader (if mp4p (make-mp4-reader c) (make-block-reader c))
        :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
-       :h264 (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/AVC") (%make-h264 vt))
+       :h264 h264
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (reed:make-opus-decoder :channels (track-channels at)))))))
 

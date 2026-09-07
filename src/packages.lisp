@@ -41,7 +41,7 @@
    #:picture-y-stride #:picture-uv-stride #:picture-y-offset #:picture-uv-offset
    #:picture-timestamp #:picture->rgb #:picture->rgb-into #:picture->yuv420
    ;; player
-   #:open-media #:open-webm #:seek-media #:player-kind #:player-tick #:player-unsupported #:webm-player #:next-video-frame #:next-audio-frame #:player-video-track
+   #:open-media #:open-webm #:seek-media #:player-kind #:player-tick #:player-unsupported #:player-video-note #:webm-player #:next-video-frame #:next-audio-frame #:player-video-track
    #:player-audio-track #:player-webm #:player-duration #:player-frame-rate
    #:decode-all-audio #:write-ppm #:play-to-ffplay #:seek-webm #:player-eof-p))
 

@@ -62,7 +62,8 @@
                 ("cabac-p" . "P slices, one reference")
                 ("c-m3ref" . "P slices, three references")
                 ("c-mall" . "P slices, three references and every partition size")
-                ("cabac-pbbb" . "real motion, 60 frames, everything at once")))
+                ("cabac-pbbb" . "real motion, 60 frames, everything at once")
+                ("w-cabac" . "weighted prediction and a reordered reference list")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
@@ -93,7 +94,8 @@
                 ("t-ref3-16x16" . "three reference pictures")
                 ("t-p4x4" . "8x4, 4x8 and 4x4 sub-partitions")
                 ("t-i4x4" . "intra macroblocks inside P slices")
-                ("pbbb" . "real motion, three references, every partition size")))
+                ("pbbb" . "real motion, three references, every partition size")
+                ("w-cavlc" . "weighted prediction and a reordered reference list")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
