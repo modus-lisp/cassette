@@ -71,6 +71,47 @@
             (and (= n 20) (= exact 20)))))
   (error (e) (ok (format nil "MP4 video: ~a" e) nil)))
 
+(format t "~&== decoding pictures at the same time gives the same pictures~%")
+;; The parallel path is only sound because an I picture is decodable on its own, and the whole
+;; claim is that it changes nothing.  So: decode every fixture both ways and compare the samples,
+;; not just the frame count — a race that dropped or duplicated a picture would still count right.
+(dolist (name '("intra" "crop" "big" "mandel" "coarse"))
+  (handler-case
+      (let* ((bytes (slurp (format nil "vectors/~a.h264" name)))
+             (serial (reel.h264:decode-annex-b bytes :threads 1))
+             (parallel (reel.h264:decode-annex-b bytes :threads 8)))
+        (ok (format nil "~a: ~d pictures either way" name (length serial))
+            (and (plusp (length serial)) (= (length serial) (length parallel))))
+        (let ((same t))
+          (loop for a in serial for b in parallel
+                do (let ((ya (reel.h264:picture->yuv420 a)) (yb (reel.h264:picture->yuv420 b)))
+                     (unless (equalp ya yb) (setf same nil))))
+          (ok (format nil "~a: every picture is sample-for-sample identical" name) same)))
+    (error (e) (ok (format nil "~a parallel: ~a" name e) nil))))
+
+(handler-case
+    (let ((aus (nth-value 1 (reel.h264:split-access-units
+                             (reel.h264:annex-b-nals (slurp "vectors/intra.h264"))))))
+      (ok (format nil "an all-intra stream is recognised as independently decodable (~d units)"
+                  (length aus))
+          (reel.h264:access-units-independent-p aus)))
+  (error (e) (ok (format nil "independence check: ~a" e) nil)))
+
+(handler-case
+    (let* ((m (cassette:parse-mp4 (slurp "vectors/fast.mp4")))
+           (tr (cassette:mp4-video-track m))
+           (r (cassette:make-mp4-reader m))
+           (aus (loop repeat 6
+                      for f = (cassette:read-next-mp4-frame r)
+                      while f
+                      when (eq (cassette:frame-track f) tr)
+                        collect (reel.h264:length-prefixed-nals (cassette:frame-data f)
+                                                                :length-size 4))))
+      ;; fast.mp4 has P and B frames: it must NOT be claimed as independently decodable
+      (ok "an inter-coded stream is refused by the independence check, not decoded in parallel"
+          (not (reel.h264:access-units-independent-p aus))))
+  (error (e) (ok (format nil "inter-coded independence check: ~a" e) nil)))
+
 (format t "~&== what is refused is refused, not decoded wrong~%")
 (handler-case
     (let ((p (cassette:open-media "vectors/fast.mp4")))

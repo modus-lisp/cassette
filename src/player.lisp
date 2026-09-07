@@ -27,6 +27,9 @@
   (pending-audio '())                           ; frames read past a video frame
   (pending-video '())
   (need-key nil)                                ; after a seek: skip to the next key frame
+  ;; H.264 pictures decoded ahead, in order, waiting to be handed out one at a time
+  (h264-ready '())
+  (h264-batch 0)                                ; 0 = decide on the first batch, -1 = serial only
   (eof nil))
 
 (defun %decodable-video-p (codec)
@@ -109,6 +112,7 @@
     (when cue
       (setf (player-reader p) (make-block-reader w :start (cdr cue))
             (player-pending-audio p) '() (player-pending-video p) '()
+            (player-h264-ready p) '()
             (player-eof p) nil
             (player-need-key p) t)
       (/ (* (car cue) scale) 1d9))))
@@ -132,6 +136,7 @@
       (multiple-value-bind (r landed) (seek-mp4 (player-webm p) seconds)
         (setf (player-reader p) r
               (player-pending-audio p) '() (player-pending-video p) '()
+              (player-h264-ready p) '()
               (player-eof p) nil (player-need-key p) t)
         landed)
       (seek-webm p seconds)))
@@ -152,12 +157,77 @@
               ((and vt (eq (frame-track f) vt))
                (setf (player-pending-video p) (nconc (player-pending-video p) (list f)))))))))
 
+(defparameter *h264-read-ahead* 8
+  "How many H.264 pictures to decode at once when the stream allows it.
+
+   The pictures in an all-intra stream are independent, so a batch of them decodes on as many cores
+   as there are pictures — about five times faster here at eight.  The number is a trade: bigger
+   batches scale better and cost more latency on a seek, because the first picture after one is not
+   ready until its whole batch is.  Eight is a third of a second of video and about 60 ms of work.")
+
+(defun %h264-fill-batch (p vt scale)
+  "Read ahead up to *H264-READ-AHEAD* samples and decode their pictures at once.
+
+   Returns T if anything was queued.  Falls back to serial decoding — and remembers to keep doing
+   so — the moment the stream turns out not to be all-intra, which is what happens on the first P
+   slice of an ordinary inter-coded file."
+  (let ((aus '()) (stamps '()) (n 0))
+    ;; collect the compressed samples first; demuxing stays serial and is cheap
+    (loop while (< n *h264-read-ahead*)
+          do (let ((f (%next-frame-for p vt)))
+               (when (null f) (return))
+               ;; after a seek, drop samples until the first key frame rather than decoding them
+               (cond
+                 ((and (player-need-key p) (not (frame-keyframe-p f))))
+                 (t
+                  (setf (player-need-key p) nil)
+                  (push (reel.h264:length-prefixed-nals (frame-data f)
+                                                        :length-size (player-nal-length p))
+                        aus)
+                  (push (frame-timestamp f scale) stamps)
+                  (incf n)))))
+    (setf aus (nreverse aus) stamps (nreverse stamps))
+    (when (null aus) (return-from %h264-fill-batch nil))
+    (let ((pics (and (> *h264-read-ahead* 1)
+                     (reel.h264:decode-independent (player-h264 p) aus))))
+      (cond
+        (pics
+         (setf (player-h264-ready p)
+               (loop for pic in pics for ts in stamps
+                     when pic
+                       collect (let ((out (reel.h264:as-picture pic)))
+                                 (setf (picture-timestamp out) ts)
+                                 out)))
+         t)
+        (t
+         ;; not independently decodable: this stream is serial from here on, and the samples just
+         ;; read still have to be decoded, in order, through the streaming decoder
+         (setf (player-h264-batch p) -1)
+         (setf (player-h264-ready p)
+               (loop for au in aus for ts in stamps
+                     for pic = (let ((r nil))
+                                 (dolist (nal au r)
+                                   (let ((q (reel.h264:feed-nal (player-h264 p) nal)))
+                                     (when q (setf r q)))))
+                     when pic
+                       collect (let ((out (reel.h264:as-picture pic)))
+                                 (setf (picture-timestamp out) ts)
+                                 out)))
+         t)))))
+
 (defun next-video-frame (p)
   "Decode and return the next *displayed* video PICTURE (timestamp set in
    seconds), or NIL at end of stream.  Hidden frames (altref) are decoded
    and skipped."
   (let ((vt (player-video-track p)) (scale (player-tick p)))
     (unless vt (return-from next-video-frame nil))
+    ;; H.264: hand out what has already been decoded, and refill in batches while the stream lets us
+    (when (player-h264 p)
+      (loop
+        (when (player-h264-ready p)
+          (return-from next-video-frame (pop (player-h264-ready p))))
+        (when (minusp (player-h264-batch p)) (return))       ; serial from here on
+        (unless (%h264-fill-batch p vt scale) (return-from next-video-frame nil))))
     (loop
      (block skip
       (let ((f (%next-frame-for p vt)))
