@@ -20,14 +20,17 @@
   unsupported                                   ; (codec-id ...) present but not decodable here
   video-track audio-track
   reader                                        ; block reader over the whole stream
-  vp8                                           ; VP8-DECODER or NIL
+  vp8                                           ; reel VP8 decoder, or NIL
+  h264                                          ; reel.h264 decoder, or NIL
+  (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
   (pending-audio '())                           ; frames read past a video frame
   (pending-video '())
   (need-key nil)                                ; after a seek: skip to the next key frame
   (eof nil))
 
-(defun %decodable-video-p (codec) (equal codec "V_VP8"))
+(defun %decodable-video-p (codec)
+  (member codec '("V_VP8" "V_MPEG4/ISO/AVC") :test #'equal))
 (defun %decodable-audio-p (codec) (equal codec "A_OPUS"))
 
 (defun open-media (source &key (audio t))
@@ -57,8 +60,27 @@
        :unsupported (nreverse unsupported)
        :video-track vt :audio-track at
        :reader (if mp4p (make-mp4-reader c) (make-block-reader c))
-       :vp8 (and vt (make-decoder))
+       :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
+       :h264 (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/AVC") (%make-h264 vt))
+       :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (reed:make-opus-decoder :channels (track-channels at)))))))
+
+(defun %avcc-nal-length (avcc)
+  "The NAL length-prefix width an `avcC' declares, or NIL when there is no avcC."
+  (when (and avcc (>= (length avcc) 5)) (1+ (logand (aref avcc 4) 3))))
+
+(defun %make-h264 (vt)
+  "An H.264 decoder primed with the SPS and PPS from the track's `avcC'.
+
+   Those parameter sets live in the container, not in the samples — an MP4 or Matroska H.264
+   track carries them once in CodecPrivate and the samples reference them — so a decoder that is
+   only ever fed samples never learns the picture size and refuses the first slice."
+  (let ((d (reel.h264:make-decoder))
+        (avcc (track-codec-private vt)))
+    (when (and avcc (plusp (length avcc)))
+      (multiple-value-bind (sps pps) (reel.h264:avcc-parameter-sets avcc)
+        (dolist (n (append sps pps)) (reel.h264:feed-nal d n))))
+    d))
 
 (defun open-webm (source &key (audio t))
   "OPEN-MEDIA, kept under the name it had when this repo only read one container."
@@ -142,10 +164,23 @@
         (when (null f) (return-from next-video-frame nil))
         (when (player-need-key p)
           (if (frame-keyframe-p f) (setf (player-need-key p) nil) (return-from skip)))
-        (multiple-value-bind (pic shown)
-            (decode-frame (player-vp8 p) (frame-data f) :timestamp (frame-timestamp f scale))
-          (when (and shown pic (not (frame-invisible-p f)))
-            (return-from next-video-frame pic))))))))
+        (cond
+          ((player-h264 p)
+           ;; an MP4/Matroska sample is a run of length-prefixed NAL units, not a byte stream
+           (let ((pic nil))
+             (dolist (n (reel.h264:length-prefixed-nals
+                         (frame-data f) :length-size (player-nal-length p)))
+               (let ((r (reel.h264:feed-nal (player-h264 p) n)))
+                 (when r (setf pic r))))
+             (when pic
+               (let ((out (reel.h264:as-picture pic)))
+                 (setf (picture-timestamp out) (frame-timestamp f scale))
+                 (return-from next-video-frame out)))))
+          (t
+           (multiple-value-bind (pic shown)
+               (decode-frame (player-vp8 p) (frame-data f) :timestamp (frame-timestamp f scale))
+             (when (and shown pic (not (frame-invisible-p f)))
+               (return-from next-video-frame pic))))))))))
 
 (defun next-audio-frame (p)
   "Decode the next Opus packet.  Returns (values pcm timestamp-seconds) where

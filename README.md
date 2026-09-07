@@ -24,8 +24,8 @@ knowing about the other (see `inspect/test-encode-mux.lisp`).
 | Muxer | Seekable output: SeekHead, Info, Tracks, Cues (before the clusters, fixed-width so offsets are known up front), SimpleBlocks, BlockGroup+DiscardPadding for Opus tails.  Round-trips ffmpeg-made files byte-for-byte at the frame level and ffmpeg decodes the result to identical pixels. |
 | Audio | Opus through `reed`.  Vorbis is demuxed but not decoded (video-only playback). |
 | Seeking | `seek-webm` repositions at the cluster at or before a time and hands out the next key frame first; a caller wanting the exact frame decodes forward from there (warp's media player does). |
-| Codecs | Video is [`reel`](../reel)'s: VP8 only. **An MP4 is usually H.264, which reel does not decode** — such a file opens anyway, names the codec in `player-unsupported`, and plays whatever else it has. Audio is [`reed`](../reed)'s: Opus per packet here; AAC through reed's own MP4 reader. |
-| Not done | H.264/VP9/AV1 decoding, Vorbis, an MP4 muxer, A/V pacing (the player is pull-model; the caller paces — see `warp-media` for a paced player on top of this). |
+| Codecs | Video is [`reel`](../reel)'s: VP8 in full, and H.264 for intra-only streams. `next-video-frame` picks the decoder off the track and the caller does not have to care which. A codec nothing here decodes is named in `player-unsupported` rather than hidden, and the file still opens and plays whatever else it has. Audio is [`reed`](../reed)'s: Opus per packet here; AAC through reed's own MP4 reader. |
+| Not done | H.264 P and B slices (an ordinary inter-coded MP4 decodes its first frames and then signals — see reel's `src/h264/NOTES.md`), VP9/AV1, Vorbis, an MP4 muxer, A/V pacing (the player is pull-model; the caller paces — see `warp-media` for a paced player on top of this). |
 
 ## Playback
 
@@ -90,6 +90,7 @@ All tests compare against ffmpeg (needed on `PATH`):
 ```sh
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-decode.lisp      # bit-exact YUV vs ffmpeg, all vectors
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-mp4.lisp         # every MP4 packet vs ffprobe
+sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-h264.lisp        # H.264 frames vs ffmpeg, Annex B and through an MP4
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-mux.lisp         # demux -> remux -> ffprobe / ffmpeg md5
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/test-encode-mux.lisp  # webrtc-media encoder -> mux -> both decoders agree
 sbcl --dynamic-space-size 2048 --non-interactive --load inspect/dump-frame.lisp FILE.webm /tmp/out 0 45  # PPM dumps
