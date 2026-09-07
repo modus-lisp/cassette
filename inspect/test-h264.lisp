@@ -218,13 +218,23 @@
   (error (e) (ok (format nil "inter-coded independence check: ~a" e) nil)))
 
 (format t "~&== what is refused is refused, not decoded wrong~%")
+;; fast.mp4 is High profile with the 8x8 transform.  That flag is the whole reason it is turned
+;; away: with it set, every macroblock carrying luma residual also carries a transform_size_8x8_flag,
+;; and a decoder that does not read that bit does not lose the transform, it loses the bitstream —
+;; one bit per macroblock, confident garbage from the first picture.  It used to be refused for
+;; having B slices, which it also has, but those decode now.
+;;
+;; What is asserted is the SHAPE of the refusal, not its wording: the track is named as
+;; undecodable, no picture is produced, and the file still opens so the rest of it can play.
 (handler-case
     (let ((p (cassette:open-media "vectors/fast.mp4")))
-      ;; fast.mp4 has B-frames, which this decoder does not do
-      (handler-case (progn (loop repeat 3 do (cassette:next-video-frame p))
-                           (ok "a B-frame stream is refused rather than decoded wrong" nil))
-        (error () (ok "a B-frame stream is refused rather than decoded wrong" t))))
-  (error () (ok "a B-frame stream is refused rather than decoded wrong" t)))
+      (ok "a High profile stream is named as undecodable rather than decoded"
+          (and (null (cassette:player-video-track p))
+               (member "V_MPEG4/ISO/AVC" (cassette:player-unsupported p) :test #'equal)
+               (null (cassette:next-video-frame p))))
+      (ok "and it says why" (let ((n (cassette:player-video-note p)))
+                              (and n (search "8x8" n)))))
+  (error (e) (ok (format nil "High profile refusal: ~a" e) nil)))
 
 (format t "~&~a~%" (if (zerop *fails*) "H264 OK" (format nil "H264: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))
