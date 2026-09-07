@@ -133,7 +133,9 @@
                 ("b-mix" . "a scene cut: intra in B slices, mixed partition modes")
                 ("bt-r3" . "temporal direct with three reference pictures")
                 ("bs-r3" . "spatial direct with three reference pictures")
-                ("bt-r1" . "temporal direct with one reference picture")))
+                ("bt-r1" . "temporal direct with one reference picture")
+                ("b-hard" . "everything at once: weighting, three refs, all partitions")
+                ("k-nopart" . "a coded direct macroblock beside one coding a reference index")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
