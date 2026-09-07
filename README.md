@@ -25,6 +25,7 @@ knowing about the other (see `inspect/test-encode-mux.lisp`).
 | Audio | Opus through `reed`.  Vorbis is demuxed but not decoded (video-only playback). |
 | Seeking | `seek-webm` repositions at the cluster at or before a time and hands out the next key frame first; a caller wanting the exact frame decodes forward from there (warp's media player does). |
 | Codecs | Video is [`reel`](../reel)'s: VP8 in full, and H.264 for intra-only streams. `next-video-frame` picks the decoder off the track and the caller does not have to care which. H.264 is read ahead in batches (`*h264-read-ahead*`) and decoded on several cores at once where the stream allows it, which is most of the difference between 38 and 118 fps at 640x360. A codec nothing here decodes is named in `player-unsupported` rather than hidden, and the file still opens and plays whatever else it has. Audio is [`reed`](../reed)'s: Opus per packet here; AAC through reed's own MP4 reader. |
+| Road map | [reel's FORMATS.md](../reel/FORMATS.md) covers the whole stack: what plays, what is refused, and the gaps in the order they are worth closing. |
 | Not done | H.264 P and B slices (an ordinary inter-coded MP4 decodes its first frames and then signals — see reel's `src/h264/NOTES.md`), VP9/AV1, Vorbis, an MP4 muxer, A/V pacing (the player is pull-model; the caller paces — see `warp-media` for a paced player on top of this). |
 
 ## Playback
