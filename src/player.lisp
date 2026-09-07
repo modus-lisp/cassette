@@ -30,6 +30,12 @@
   (need-key nil)                                ; after a seek: skip to the next key frame
   ;; H.264 pictures decoded ahead, in order, waiting to be handed out one at a time
   (h264-ready '())
+  ;; Presentation times of samples fed but not yet matched to a picture, smallest first.  B
+  ;; pictures come out of the decoder in DISPLAY order and go in in coding order, so a picture
+  ;; cannot be labelled with the timestamp of the sample that produced it — the two are different
+  ;; samples.  Sorted ascending, the pending times ARE display order, so each picture takes the
+  ;; earliest one still unclaimed.
+  (h264-stamps '())
   (h264-batch 0)                                ; 0 = decide on the first batch, -1 = serial only
   (eof nil))
 
@@ -124,7 +130,7 @@
     (when cue
       (setf (player-reader p) (make-block-reader w :start (cdr cue))
             (player-pending-audio p) '() (player-pending-video p) '()
-            (player-h264-ready p) '()
+            (player-h264-ready p) '() (player-h264-stamps p) '()
             (player-eof p) nil
             (player-need-key p) t)
       (/ (* (car cue) scale) 1d9))))
@@ -148,7 +154,7 @@
       (multiple-value-bind (r landed) (seek-mp4 (player-webm p) seconds)
         (setf (player-reader p) r
               (player-pending-audio p) '() (player-pending-video p) '()
-              (player-h264-ready p) '()
+              (player-h264-ready p) '() (player-h264-stamps p) '()
               (player-eof p) nil (player-need-key p) t)
         landed)
       (seek-webm p seconds)))
@@ -199,8 +205,16 @@
                   (push (frame-timestamp f scale) stamps)
                   (incf n)))))
     (setf aus (nreverse aus) stamps (nreverse stamps))
-    (when (null aus) (return-from %h264-fill-batch nil))
+    (when (null aus)
+      ;; end of the samples: whatever the reorder buffer is still holding comes out now, or the
+      ;; last pictures of every file would simply never appear
+      (let ((tail (ignore-errors (reel.h264:flush-decoder (player-h264 p)))))
+        (when tail
+          (setf (player-h264-ready p) (%label-pictures p tail))
+          (return-from %h264-fill-batch t)))
+      (return-from %h264-fill-batch nil))
     (let ((pics (and (> *h264-read-ahead* 1)
+                     (not (minusp (player-h264-batch p)))
                      (reel.h264:decode-independent (player-h264 p) aus))))
       (cond
         (pics
@@ -215,17 +229,22 @@
          ;; not independently decodable: this stream is serial from here on, and the samples just
          ;; read still have to be decoded, in order, through the streaming decoder
          (setf (player-h264-batch p) -1)
-         (setf (player-h264-ready p)
-               (loop for au in aus for ts in stamps
-                     for pic = (let ((r nil))
-                                 (dolist (nal au r)
-                                   (let ((q (reel.h264:feed-nal (player-h264 p) nal)))
-                                     (when q (setf r q)))))
-                     when pic
-                       collect (let ((out (reel.h264:as-picture pic)))
-                                 (setf (picture-timestamp out) ts)
-                                 out)))
+         (let ((got '()))
+           (loop for au in aus for ts in stamps
+                 do (setf (player-h264-stamps p)
+                          (merge 'list (player-h264-stamps p) (list ts) #'<))
+                    (dolist (nal au)
+                      (let ((q (reel.h264:feed-nal (player-h264 p) nal)))
+                        (when q (push q got)))))
+           (setf (player-h264-ready p) (%label-pictures p (nreverse got))))
          t)))))
+
+(defun %label-pictures (p pics)
+  "Turn decoder pictures into cassette ones, each taking the earliest unclaimed presentation time."
+  (loop for pic in pics
+        collect (let ((out (reel.h264:as-picture pic)))
+                  (setf (picture-timestamp out) (pop (player-h264-stamps p)))
+                  out)))
 
 (defun next-video-frame (p)
   "Decode and return the next *displayed* video PICTURE (timestamp set in
@@ -233,12 +252,14 @@
    and skipped."
   (let ((vt (player-video-track p)) (scale (player-tick p)))
     (unless vt (return-from next-video-frame nil))
-    ;; H.264: hand out what has already been decoded, and refill in batches while the stream lets us
+    ;; H.264 always goes through the read-ahead queue, even once a stream has turned out not to be
+    ;; independently decodable.  It is not only about speed: the queue is where pictures are matched
+    ;; to presentation times, and a B picture cannot take the time of the sample that produced it —
+    ;; it comes out of the decoder several samples later, in display order.
     (when (player-h264 p)
       (loop
         (when (player-h264-ready p)
           (return-from next-video-frame (pop (player-h264-ready p))))
-        (when (minusp (player-h264-batch p)) (return))       ; serial from here on
         (unless (%h264-fill-batch p vt scale) (return-from next-video-frame nil))))
     (loop
      (block skip
