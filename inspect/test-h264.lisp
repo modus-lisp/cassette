@@ -50,6 +50,37 @@
                   (and (plusp n) (= exact n))))))
     (error (e) (ok (format nil "~a: ~a" name e) nil))))
 
+(format t "~&== P slices: motion compensation, against ffmpeg~%")
+;; Inter prediction has failure modes that do not desynchronise the bitstream — a wrong predicted
+;; vector, a wrong interpolation position, a wrong boundary strength — so these compare every
+;; sample of every frame with the loop filter ON, which is what a conforming decoder outputs.
+;; The fixtures are chosen to separate the things that broke independently while this was written:
+;; a single reference against three, and 16x16 partitions against sub-8x8 ones.
+(dolist (spec '(("pslice" . "synthetic motion, one reference")
+                ("pmandel" . "a coarse quantiser")
+                ("t-ref3-16x16" . "three reference pictures")
+                ("t-p4x4" . "8x4, 4x8 and 4x4 sub-partitions")
+                ("t-i4x4" . "intra macroblocks inside P slices")
+                ("pbbb" . "real motion, three references, every partition size")))
+  (destructuring-bind (name . what) spec
+    (handler-case
+        (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
+                                               :threads 1))
+               (oracle (slurp (format nil "vectors/~a.yuv" name))))
+          (if (null pics)
+              (ok (format nil "~a: decoded no pictures" name) nil)
+              (let* ((fb (length (reel.h264:picture->yuv420 (first pics))))
+                     (n (min (length pics) (floor (length oracle) fb)))
+                     (exact 0))
+                (dotimes (i n)
+                  (let ((y (reel.h264:picture->yuv420 (nth i pics))) (off (* i fb)) (bad 0))
+                    (dotimes (k fb)
+                      (unless (= (aref y k) (aref oracle (+ off k))) (incf bad)))
+                    (when (zerop bad) (incf exact))))
+                (ok (format nil "~a (~a): ~d frames, ~d bit-exact" name what n exact)
+                    (and (plusp n) (= exact n))))))
+      (error (e) (ok (format nil "~a: ~a" name e) nil)))))
+
 (format t "~&== an MP4's video track, through the container~%")
 (handler-case
     (let* ((oracle (slurp "vectors/intra20.yuv"))
