@@ -115,6 +115,41 @@
                     (and (plusp n) (= exact n))))))
       (error (e) (ok (format nil "~a: ~a" name e) nil)))))
 
+(format t "~&== B slices: two reference lists, and prediction from both at once~%")
+;; A B picture is decoded AFTER the picture it is displayed before, so these also check the output
+;; reordering: the comparison is against ffmpeg's frames in DISPLAY order, and a decoder that hands
+;; pictures over as it finishes them fails here even with every sample right.
+;;
+;; The fixtures separate what broke separately: the two direct modes are different algorithms, the
+;; weighted variant derives its weights from picture order rather than being told them, and b-mix
+;; has a scene cut in it, which is what makes an encoder put intra macroblocks inside a B slice and
+;; give four 8x8 partitions four different prediction modes.
+(dolist (spec '(("b-spat" . "spatial direct, CAVLC")
+                ("b-temp" . "temporal direct, CAVLC")
+                ("b-cabac" . "spatial direct, CABAC")
+                ("b-ref3" . "three reference pictures")
+                ("b-sub" . "every partition size")
+                ("b-wb" . "implicit weighted bi-prediction")
+                ("b-mix" . "a scene cut: intra in B slices, mixed partition modes")))
+  (destructuring-bind (name . what) spec
+    (handler-case
+        (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
+                                               :threads 1))
+               (oracle (slurp (format nil "vectors/~a.yuv" name))))
+          (if (null pics)
+              (ok (format nil "~a: decoded no pictures" name) nil)
+              (let* ((fb (length (reel.h264:picture->yuv420 (first pics))))
+                     (n (min (length pics) (floor (length oracle) fb)))
+                     (exact 0))
+                (dotimes (i n)
+                  (let ((y (reel.h264:picture->yuv420 (nth i pics))) (off (* i fb)) (bad 0))
+                    (dotimes (k fb)
+                      (unless (= (aref y k) (aref oracle (+ off k))) (incf bad)))
+                    (when (zerop bad) (incf exact))))
+                (ok (format nil "~a (~a): ~d frames in display order, ~d bit-exact" name what n exact)
+                    (and (plusp n) (= exact n))))))
+      (error (e) (ok (format nil "~a: ~a" name e) nil)))))
+
 (format t "~&== an MP4's video track, through the container~%")
 (handler-case
     (let* ((oracle (slurp "vectors/intra20.yuv"))
