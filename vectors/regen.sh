@@ -88,3 +88,14 @@ done
 for f in w-cabac w-cavlc; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# B-slice fixtures, for the stage that is not written yet.  b-adapt=0 forces the full B pattern
+# rather than letting x264 decide per frame, and the two direct modes are separated because they
+# are separate algorithms.
+#   B="b-adapt=0:bframes=2:b-pyramid=none:weightp=0:ref=1:partitions=none"
+#   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v main \
+#          -x264-params "$B:direct=spatial:cabac=0" -qp 24 -bsf:v h264_mp4toannexb -f h264 b-spat.h264
+#   ...b-temp with direct=temporal, b-cabac with direct=spatial:cabac=1
+for f in b-spat b-temp b-cabac; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
