@@ -309,3 +309,8 @@ done
 for f in vp9-cif vp9-720 vp9-switch vp9-lossless vp9-alt; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.webm" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+#   ffmpeg -f lavfi -i "testsrc2=size=176x144:rate=25:duration=0.8" \
+#          -c:v libvpx-vp9 -b:v 300k -cpu-used 4 -frame-parallel 0 vp9-seq.webm
+#          # frame-parallel OFF, so the probability context is refreshed by backward adaptation
+#          # from each frame's symbol counts — nothing else exercises that path
+ffmpeg -hide_banner -loglevel error -y -i vp9-seq.webm -f rawvideo -pix_fmt yuv420p vp9-seq.yuv

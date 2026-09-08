@@ -229,6 +229,11 @@
 (check-sequence "vp9-switch")     ; the transform mode is switchable here
 (check-sequence "vp9-lossless")   ; the Walsh-Hadamard, and a filter level of zero
 (check-sequence "vp9-alt")        ; encoded with alt-ref frames enabled
+;; THE ONE THAT DOES NOT SET FRAME-PARALLEL MODE, and so refreshes its probability context from the
+;; symbol counts of each decoded frame rather than from the forward updates in its header.  Nothing
+;; else exercises the backward adaptation, and a decoder without it is right on the first frame and
+;; drifts from there.
+(check-sequence "vp9-seq")
 
 (format t "~&== superframes~%")
 (handler-case
@@ -268,7 +273,7 @@
 ;;;
 ;;; These are kept as tests so that they stop being true when the work lands.
 
-(format t "~&== refusals, kept as tests until the frame decoder lands~%")
+(format t "~&== refusals~%")
 (defun expect-refusal (what thunk)
   (handler-case (progn (funcall thunk) (ok what nil))
     (reel.vp9:vp9-error (e)
