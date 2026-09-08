@@ -284,3 +284,13 @@ ffmpeg -hide_banner -loglevel error -y -i ffv1-rice-rgb.mkv -f rawvideo -pix_fmt
 for f in theora theora-q2 theora-q9 theora-odd theora-320 theora-bars theora-av; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.ogv" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# ---- VP9 ------------------------------------------------------------------------------------------
+#
+# Two sizes, because the tiling is derived from the frame width and only a wide frame has more than
+# one tile column — 1280 gives four, 176 gives one, and the header parse differs between them.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.8"
+#   ffmpeg -f lavfi -i "$S" -c:v libvpx-vp9 -b:v 300k -cpu-used 4 vp9-cif.webm
+#   ffmpeg -f lavfi -i "testsrc2=size=1280x720:rate=25:duration=0.4" \
+#          -c:v libvpx-vp9 -b:v 1500k -tile-columns 2 -cpu-used 4 vp9-720.webm
