@@ -31,6 +31,7 @@
   mpeg4                                         ; reel.mpeg4 decoder state or NIL
   ffv1                                          ; reel.ffv1 decoder state or NIL
   theora                                        ; reel.theora decoder state or NIL
+  vp9                                           ; reel.vp9 decoder state or NIL
   ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
   (mpeg2-ready '())
   (mpeg2-stamps '())
@@ -50,7 +51,7 @@
 
 (defun %decodable-video-p (codec)
   (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP" "V_FFV1"
-                  "V_THEORA")
+                  "V_THEORA" "V_VP9")
           :test #'equal))
 
 (defun %vfw-codec (private)
@@ -181,6 +182,7 @@
                    (reel.mpeg4:make-decoder))
        :ffv1 (and vt (equal (track-codec-id vt) "V_FFV1") ffv1)
        :theora (and vt (equal (track-codec-id vt) "V_THEORA") theora)
+       :vp9 (and vt (equal (track-codec-id vt) "V_VP9") (reel.vp9:make-vp9-decoder))
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
@@ -455,6 +457,25 @@
                (out (and fr (reel.theora:as-picture fr))))
           (when out (setf (picture-timestamp out) (frame-timestamp f scale)))
           (return-from next-video-frame out))))
+    ;; VP9 needs a loop rather than a single read, because ONE PACKET MAY HOLD SEVERAL FRAMES and
+    ;; most of them produce no picture: a hidden alt-ref is built and kept, and only the visible
+    ;; frame glued after it comes out.  So the packet is split, every frame is decoded, and the one
+    ;; that is shown is returned.
+    (when (player-vp9 p)
+      (loop
+        (when (player-pending-video p)
+          (return-from next-video-frame (pop (player-pending-video p))))
+        (let ((f (%next-frame-for p vt)))
+          (when (null f) (return-from next-video-frame nil))
+          (let ((data (coerce (frame-data f) '(simple-array (unsigned-byte 8) (*))))
+                (out '()))
+            (dolist (part (reel.vp9:split-superframe data))
+              (let ((pic (reel.vp9:decode-frame (player-vp9 p) data (car part) (cdr part))))
+                (when pic
+                  (let ((q (reel.vp9:as-picture pic)))
+                    (setf (picture-timestamp q) (frame-timestamp f scale))
+                    (push q out)))))
+            (setf (player-pending-video p) (nreverse out))))))
     ;; MPEG video goes through a queue for the same reason H.264 does, and it is worth saying
     ;; plainly: ONE ACCESS UNIT IS NOT ONE PICTURE OUT.  A decoder holds each reference picture back
     ;; until the next one arrives, so feeding a P picture yields the I picture before it, and the

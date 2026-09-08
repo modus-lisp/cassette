@@ -1,14 +1,15 @@
-;;;; test-vp9.lisp — VP9's headers, which are all that decodes so far.
+;;;; test-vp9.lisp — VP9, from its two headers to a decoded picture.
 ;;;;
-;;;; The uncompressed header is worth having on its own even before a picture can be produced: it
-;;;; carries the frame size, the reference indices, the quantiser, the loop filter and the tiling,
-;;;; and it is plain bits — no arithmetic coder, no probability state, nothing to carry forward.  A
-;;;; container or a router can read all of that without a decoder, which is the point of VP9 putting
-;;;; it there.
+;;;; The suite is layered, and the layers were written in the order the decoder was: each could be
+;;;; checked before the one below it existed, which is what kept the work honest.
 ;;;;
-;;;; So this suite checks what can be checked: that every frame of a real file parses, that the
-;;;; fields agree with what the encoder was told, that a superframe splits into its parts, and that
-;;;; everything not yet built is refused by name.
+;;;; The uncompressed header parses with no decoding state at all, so it can be checked against what
+;;;; the encoder was told.  The compressed header and each tile are arithmetic-coded partitions of a
+;;;; STATED LENGTH, so a correct parse consumes them to the byte — a check worth as much as a
+;;;; decoded picture, and available long before there was one.  And then the pictures themselves,
+;;;; sample for sample against ffmpeg.
+;;;;
+;;;; What is still refused is refused by name, and those refusals are tests too.
 ;;;;
 ;;;;   sbcl --dynamic-space-size 3072 --non-interactive --load inspect/test-vp9.lisp
 
@@ -188,70 +189,46 @@
 (check-tiles "vp9-720")      ; four tile columns, so the tile length fields are exercised too
 (check-tiles "vp9-switch")
 
-(format t "~&== VP9 reconstruction: a decoded picture, compared~%")
+(format t "~&== VP9, whole sequences, every picture against ffmpeg~%")
 
-;;; Every INTRA frame of every fixture, against ffmpeg, sample for sample.  That covers the whole
-;;; decoder except inter prediction: the partition walk, every block mode, every coefficient, all
-;;; four transform sizes with both the DCT and the ADST, the fifteen intra predictors with their
-;;; substitutions for missing neighbours, the loop filter with all three of its widths, and the crop.
-;;;
-;;; The lossless fixture is here for two reasons of its own: it is the only one that exercises the
-;;; Walsh-Hadamard, and — because a lossless frame's filter level is zero — it was the only one that
-;;; could be compared at all until the loop filter existed.
+;;; Every picture of every fixture, sample for sample.  That is the entire decoder: both headers,
+;;; superframes, tiles, the partition quadtree, every block mode, every coefficient, all four
+;;; transform sizes with both the DCT and the ADST, the fifteen intra predictors, the eight-tap
+;;; interpolation filters at three sharpnesses, motion vector prediction with its eight-neighbour
+;;; search, the eight reference slots, and the loop filter with all three of its widths.
 
-(defun check-picture (name)
+(defun check-sequence (name)
   (handler-case
       (let* ((m (cassette:parse-webm (slurp (format nil "vectors/~a.webm" name))))
              (vt (cassette:webm-video-track m))
              (r (cassette:make-block-reader m))
-             (ctxs (let ((v (make-array 4)))
-                     (dotimes (i 4 v) (setf (aref v i) (reel.vp9:make-default-context)))))
+             (d (reel.vp9:make-vp9-decoder))
              (want (slurp (format nil "vectors/~a.yuv" name)))
-             (refs (make-array 8 :initial-element nil))
-             (n 0) (exact 0) (frame 0))
+             (n 0) (exact 0))
         (loop for f = (cassette:read-next-frame r) while f
               do (when (eq (cassette:frame-track f) vt)
                    (let ((data (coerce (cassette:frame-data f)
                                        '(simple-array (unsigned-byte 8) (*)))))
                      (dolist (part (reel.vp9:split-superframe data))
-                       (let ((h (reel.vp9:parse-header data (car part) (cdr part)
-                                                       :ref-sizes refs)))
-                         (dotimes (i 8)
-                           (when (and (not (reel.vp9:h-show-existing h))
-                                      (logbitp i (reel.vp9:h-refresh-mask h)))
-                             (setf (aref refs i) (cons (reel.vp9:h-width h)
-                                                       (reel.vp9:h-height h)))))
-                         (cond
-                           ((reel.vp9:h-show-existing h))
-                           ((or (reel.vp9:h-keyframe h) (reel.vp9:h-intra-only h))
-                            (when (reel.vp9:h-keyframe h)
-                              (dotimes (i 4)
-                                (setf (aref ctxs i) (reel.vp9:make-default-context))))
-                            (let* ((hb (+ (car part) (reel.vp9:h-header-bytes h)))
-                                   (fp (reel.vp9:read-compressed-header
-                                        data hb (reel.vp9:h-compressed-size h) h
-                                        (aref ctxs (reel.vp9:h-frame-context h))))
-                                   (st (reel.vp9:make-state h fp)))
-                              (reel.vp9:decode-tiles
-                               data (+ hb (reel.vp9:h-compressed-size h)) (cdr part) st)
-                              (let* ((y (reel.vp9:picture->yuv420 (reel.vp9:st-frame st)))
-                                     (off (* frame (length y)))
-                                     (bad 0))
-                                (when (<= (+ off (length y)) (length want))
-                                  (dotimes (k (length y))
-                                    (unless (= (aref y k) (aref want (+ off k))) (incf bad)))
-                                  (when (zerop bad) (incf exact)))
-                                (incf n)))
-                            (incf frame))
-                           (t (incf frame))))))))
-        (ok (format nil "~a: ~d intra frame~:p, ~d bit-exact against ffmpeg" name n exact)
+                       (let ((pic (reel.vp9:decode-frame d data (car part) (cdr part))))
+                         (when pic
+                           (let* ((y (reel.vp9:picture->yuv420 pic))
+                                  (off (* n (length y)))
+                                  (bad 0))
+                             (when (<= (+ off (length y)) (length want))
+                               (dotimes (k (length y))
+                                 (unless (= (aref y k) (aref want (+ off k))) (incf bad)))
+                               (when (zerop bad) (incf exact)))
+                             (incf n))))))))
+        (ok (format nil "~a: ~d pictures, ~d bit-exact against ffmpeg" name n exact)
             (and (plusp n) (= n exact))))
-    (error (e) (ok (format nil "~a picture: ~a" name e) nil))))
+    (error (e) (ok (format nil "~a: ~a" name e) nil))))
 
-(check-picture "vp9-cif")
-(check-picture "vp9-720")        ; 1280x720 across four tile columns
-(check-picture "vp9-switch")     ; the transform mode is switchable here
-(check-picture "vp9-lossless")   ; the Walsh-Hadamard, and a filter level of zero
+(check-sequence "vp9-cif")
+(check-sequence "vp9-720")        ; 1280x720 across four tile columns
+(check-sequence "vp9-switch")     ; the transform mode is switchable here
+(check-sequence "vp9-lossless")   ; the Walsh-Hadamard, and a filter level of zero
+(check-sequence "vp9-alt")        ; encoded with alt-ref frames enabled
 
 (format t "~&== superframes~%")
 (handler-case
@@ -307,12 +284,25 @@
   (expect-refusal "a packet that is not a VP9 frame is refused on its marker"
                   (lambda () (reel.vp9:parse-header junk 0 16))))
 
+(format t "~&== through the container~%")
+;; This was a refusal test until the decoder landed.  It is kept, inverted.
 (handler-case
-    (let ((p (cassette:open-media "vectors/vp9-cif.webm" :audio nil)))
-      (ok "the player names V_VP9 as undecodable rather than guessing"
-          (and (null (cassette:player-video-track p))
-               (member "V_VP9" (cassette:player-unsupported p) :test #'equal))))
-  (error (e) (ok (format nil "player refusal: ~a" e) nil)))
+    (let* ((p (cassette:open-media "vectors/vp9-cif.webm" :audio nil))
+           (want (slurp "vectors/vp9-cif.yuv"))
+           (n 0) (exact 0) (fb nil))
+      (ok "a V_VP9 track is decodable, not named"
+          (and (cassette:player-video-track p) (null (cassette:player-unsupported p))))
+      (loop for pic = (cassette:next-video-frame p) while pic
+            do (let ((y (cassette:picture->yuv420 pic)))
+                 (unless fb (setf fb (length y)))
+                 (let ((off (* n fb)) (bad 0))
+                   (when (<= (+ off fb) (length want))
+                     (dotimes (k fb) (unless (= (aref y k) (aref want (+ off k))) (incf bad)))
+                     (when (zerop bad) (incf exact))))
+                 (incf n)))
+      (ok (format nil "and it plays: ~d pictures, ~d bit-exact" n exact)
+          (and (plusp n) (= n exact))))
+  (error (e) (ok (format nil "VP9 through the container: ~a" e) nil)))
 
-(format t "~&~a~%" (if (zerop *fails*) "VP9 HEADERS OK" (format nil "VP9: ~d FAILED" *fails*)))
+(format t "~&~a~%" (if (zerop *fails*) "VP9 OK" (format nil "VP9: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))
