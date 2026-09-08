@@ -25,6 +25,7 @@
   h264                                          ; reel.h264 decoder, or NIL
   (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
+  aac                                           ; reed AAC decoder state or NIL
   (pending-audio '())                           ; frames read past a video frame
   (pending-video '())
   (need-key nil)                                ; after a seek: skip to the next key frame
@@ -41,7 +42,11 @@
 
 (defun %decodable-video-p (codec)
   (member codec '("V_VP8" "V_MPEG4/ISO/AVC") :test #'equal))
-(defun %decodable-audio-p (codec) (equal codec "A_OPUS"))
+(defun %decodable-audio-p (codec)
+  ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
+  ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
+  ;; separately.  The two containers only ever disagreed about the NAME.
+  (member codec '("A_OPUS" "A_AAC") :test #'equal))
 
 (defun open-media (source &key (audio t))
   "Open a WebM or an MP4 from SOURCE (a pathname, a namestring, or an octet vector), whichever
@@ -84,7 +89,12 @@
        :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
        :h264 h264
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
-       :opus (and at (reed:make-opus-decoder :channels (track-channels at)))))))
+       :opus (and at (equal (track-codec-id at) "A_OPUS")
+                  (reed:make-opus-decoder :channels (track-channels at)))
+       :aac (and at (equal (track-codec-id at) "A_AAC")
+                 (reed:make-aac-decoder :asc (track-codec-private at)
+                                        :channels (max 1 (or (track-channels at) 2))
+                                        :sample-rate (round (or (track-sample-rate at) 44100))))))))
 
 (defun %avcc-nal-length (avcc)
   "The NAL length-prefix width an `avcC' declares, or NIL when there is no avcC."
@@ -286,13 +296,18 @@
                (return-from next-video-frame pic))))))))))
 
 (defun next-audio-frame (p)
-  "Decode the next Opus packet.  Returns (values pcm timestamp-seconds) where
-   PCM is a reed PCM struct (16-bit interleaved, 48 kHz), or NIL at end."
+  "Decode the next audio packet.  Returns (values pcm timestamp-seconds) where PCM is a reed PCM
+   struct of 16-bit interleaved samples, or NIL at end.
+
+   Opus is always 48 kHz; AAC comes out at whatever rate its config declares, so a caller that
+   mixes tracks has to look at PCM-SAMPLE-RATE rather than assume."
   (let ((at (player-audio-track p)) (scale (player-tick p)))
     (unless at (return-from next-audio-frame nil))
     (let ((f (%next-frame-for p at)))
       (when f
-        (values (reed:decode-opus-packet (player-opus p) (frame-data f))
+        (values (if (player-aac p)
+                    (reed:decode-aac-packet (player-aac p) (frame-data f))
+                    (reed:decode-opus-packet (player-opus p) (frame-data f)))
                 (frame-timestamp f scale))))))
 
 (defun decode-all-audio (p)

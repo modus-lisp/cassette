@@ -101,5 +101,21 @@
               (ok (format nil "~a: and it is the closest one (next sync is after 2.0 s)" name)
                   (or (null next) (> (cassette:st-time-seconds st next) 2.0))))))))))
 
+(format t "~&== AAC, from an MP4 and from a Matroska, through the same decoder~%")
+;; The point of this one is that the two answers are IDENTICAL.  An AAC access unit is a
+;; raw_data_block either way and the AudioSpecificConfig is the same bytes in `esds' and in
+;; CodecPrivate; the containers only ever disagreed about the codec's NAME.  Comparing the two
+;; decodes sample for sample is what proves the routing is routing and not a second decoder.
+(handler-case
+    (let ((a (cassette:decode-all-audio (cassette:open-media "vectors/av.mp4")))
+          (b (cassette:decode-all-audio (cassette:open-media "vectors/aac-in-mkv.mkv"))))
+      (ok "AAC decodes from an MP4" (and a (plusp (length (reed:pcm-samples a)))))
+      (ok "AAC decodes from a Matroska" (and b (plusp (length (reed:pcm-samples b)))))
+      (ok "and the two are sample for sample the same"
+          (and a b (equalp (reed:pcm-samples a) (reed:pcm-samples b))
+               (= (reed:pcm-sample-rate a) (reed:pcm-sample-rate b))
+               (= (reed:pcm-channels a) (reed:pcm-channels b)))))
+  (error (e) (ok (format nil "AAC in two containers: ~a" e) nil)))
+
 (format t "~&~a~%" (if (zerop *fails*) "MP4 DEMUX OK" (format nil "MP4 DEMUX: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))
