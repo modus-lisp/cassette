@@ -19,5 +19,6 @@ on the frame asked for.  Video decoding is reel's, audio is reed's.  No FFI."
                              (:file "mp4")
                              (:file "mpegsys")
                              (:file "avi")
+                             (:file "ogg")
                              (:file "mux")
                              (:file "player")))))

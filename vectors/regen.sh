@@ -240,3 +240,15 @@ for f in ffv1-a ffv1-16sl ffv1-dflttab; do
 done
 ffmpeg -hide_banner -loglevel error -y -i ffv1-422.mkv -f rawvideo -pix_fmt yuv422p ffv1-422.yuv
 ffmpeg -hide_banner -loglevel error -y -i ffv1-rgb.mkv -f rawvideo -pix_fmt gbrp    ffv1-rgb.yuv
+
+# ---- Ogg ------------------------------------------------------------------------------------------
+#
+# Three files for what Ogg actually is: a framing layer with no codec field.  theora-av.ogv has two
+# streams so that separating them can be checked; theora.ogv has one so that the refusal path can;
+# opus-ogg.ogg is a codec that decodes, so the packet order and timing can be.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.6"; A="sine=frequency=440:duration=0.6"
+#   ffmpeg -f lavfi -i "$S" -f lavfi -i "$A" -c:v libtheora -q:v 7 -c:a libvorbis -q:a 4 \
+#          -shortest theora-av.ogv
+#   ffmpeg -f lavfi -i "$S" -c:v libtheora -q:v 7 -an theora.ogv
+#   ffmpeg -f lavfi -i "sine=frequency=440:duration=1" -c:a libopus opus-ogg.ogg

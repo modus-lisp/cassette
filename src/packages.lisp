@@ -39,6 +39,10 @@
    ;; AVI
    #:parse-avi #:avi #:avi-p #:avi-tracks #:avi-duration #:avi-width #:avi-height
    #:avi-video-track #:avi-audio-track #:avi-frames #:make-avi-reader #:read-next-avi-frame
+   ;; Ogg
+   #:parse-ogg #:ogg #:ogg-p #:ogg-streams #:ogg-tracks #:ogg-video-track #:ogg-audio-track
+   #:ogg-stream #:os-serial #:os-codec #:os-headers #:os-packets #:ogg-stream-for
+   #:make-ogg-reader #:read-next-ogg-frame
    ;; muxer
    #:make-muxer #:add-video-track #:add-audio-track #:add-frame #:finish-webm
    #:write-webm-file #:muxer

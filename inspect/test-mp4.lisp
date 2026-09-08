@@ -117,5 +117,41 @@
                (= (reed:pcm-channels a) (reed:pcm-channels b)))))
   (error (e) (ok (format nil "AAC in two containers: ~a" e) nil)))
 
+(format t "~&== Ogg, which is a framing layer and nothing else~%")
+;; Ogg carries no codec identifier, no track table and no index.  What a stream holds is decided by
+;; recognising a magic string in its first packet, which is why the assertions below are about
+;; IDENTIFICATION as much as about decoding.
+(handler-case
+    (let ((o (cassette:parse-ogg (cassette::slurp-file "vectors/theora-av.ogv"))))
+      (ok "two streams in one file are separated and both recognised"
+          (and (= 2 (length (cassette:ogg-tracks o)))
+               (equal (sort (mapcar #'cassette:track-codec-id (cassette:ogg-tracks o))
+                            #'string<)
+                      (list "A_VORBIS" "V_THEORA"))))
+      (let ((vt (cassette:ogg-video-track o)))
+        (ok "and the Theora identification packet gives the picture size"
+            (and vt (= 176 (cassette:track-width vt)) (= 144 (cassette:track-height vt)))))
+      ;; three header packets each for Theora and Vorbis, and they are separated from the data
+      (ok "the header packets are separated from the frames"
+          (every (lambda (tr) (= 3 (length (cassette:os-headers (cassette:ogg-stream-for o tr)))))
+                 (cassette:ogg-tracks o))))
+  (error (e) (ok (format nil "Ogg inventory: ~a" e) nil)))
+
+(handler-case
+    (let* ((p (cassette:open-media "vectors/opus-ogg.ogg"))
+           (pcm (cassette:decode-all-audio p)))
+      (ok "Opus in Ogg plays"
+          (and pcm (plusp (length (reed:pcm-samples pcm)))
+               (= 48000 (reed:pcm-sample-rate pcm))
+               (null (cassette:player-unsupported p)))))
+  (error (e) (ok (format nil "Opus in Ogg: ~a" e) nil)))
+
+(handler-case
+    (let ((p (cassette:open-media "vectors/theora.ogv" :audio nil)))
+      (ok "a Theora track is named as undecodable rather than guessed at"
+          (and (null (cassette:player-video-track p))
+               (member "V_THEORA" (cassette:player-unsupported p) :test #'equal))))
+  (error (e) (ok (format nil "Theora refusal: ~a" e) nil)))
+
 (format t "~&~a~%" (if (zerop *fails*) "MP4 DEMUX OK" (format nil "MP4 DEMUX: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))

@@ -77,21 +77,23 @@
   (let* ((bytes (if (or (stringp source) (pathnamep source)) (slurp-file source) source))
          (mp4p (and (not (webm-p bytes)) (mp4-p bytes)))
          (avip (and (not mp4p) (not (webm-p bytes)) (avi-p bytes)))
-         (sysp (and (not mp4p) (not avip) (not (webm-p bytes))
+         (oggp (and (not mp4p) (not avip) (not (webm-p bytes)) (ogg-p bytes)))
+         (sysp (and (not mp4p) (not avip) (not oggp) (not (webm-p bytes))
                     (or (mpegts-p bytes) (mpegps-p bytes))))
          (sys-frames nil))
-    (unless (or mp4p sysp avip (webm-p bytes))
-      (%err "not a WebM, MP4, AVI, program stream or transport stream"))
+    (unless (or mp4p sysp avip oggp (webm-p bytes))
+      (%err "not a WebM, MP4, AVI, Ogg, program stream or transport stream"))
     (let* ((c (cond (mp4p (parse-mp4 bytes))
                     (avip (parse-avi bytes))
+                    (oggp (parse-ogg bytes))
                     (sysp (multiple-value-bind (m fr) (parse-mpegsys bytes)
                             (setf sys-frames fr) m))
                     (t (parse-webm bytes))))
            (vt (cond (mp4p (mp4-video-track c)) (avip (avi-video-track c))
-                     (sysp (mpegsys-video-track c))
+                     (oggp (ogg-video-track c)) (sysp (mpegsys-video-track c))
                      (t (webm-video-track c))))
            (at (and audio (cond (mp4p (mp4-audio-track c)) (avip (avi-audio-track c))
-                                (sysp (mpegsys-audio-track c))
+                                (oggp (ogg-audio-track c)) (sysp (mpegsys-audio-track c))
                                 (t (webm-audio-track c)))))
            (unsupported '()) (note nil) (h264 nil) (ffv1 nil))
       ;; a VFW-wrapped Matroska track names its codec inside the envelope
@@ -137,15 +139,16 @@
         (push (track-codec-id at) unsupported)
         (setf at nil))
       (make-webm-player
-       :kind (cond (mp4p :mp4) (avip :avi) (sysp :mpegsys) (t :webm))
+       :kind (cond (mp4p :mp4) (avip :avi) (oggp :ogg) (sysp :mpegsys) (t :webm))
        :webm c
-       :tick (cond (mp4p +mp4-tick+) (avip +avi-tick+) (sysp (mpegsys-tick c))
+       :tick (cond (mp4p +mp4-tick+) (avip +avi-tick+) (oggp +ogg-tick+) (sysp (mpegsys-tick c))
                    (t (webm-timecode-scale c)))
        :unsupported (nreverse unsupported)
        :video-note note
        :video-track vt :audio-track at
        :reader (cond (mp4p (make-mp4-reader c))
                      (avip (make-avi-reader c))
+                     (oggp (make-ogg-reader c))
                      (sysp (make-mpegsys-reader c sys-frames))
                      (t (make-block-reader c)))
        :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
@@ -191,6 +194,7 @@
     (:mp4 (read-next-mp4-frame (player-reader p)))
     (:mpegsys (read-next-mpegsys-frame (player-reader p)))
     (:avi (read-next-avi-frame (player-reader p)))
+    (:ogg (read-next-ogg-frame (player-reader p)))
     (t (read-next-frame (player-reader p)))))
 
 (defun player-eof-p (p) (player-eof p))
@@ -456,20 +460,28 @@
                 (frame-timestamp f scale))))))
 
 (defun decode-all-audio (p)
-  "Decode the whole audio track to one reed PCM struct, or NIL without audio."
-  (let ((chunks '()) (rate 48000) (channels 2))
+  "Decode the whole audio track to one reed PCM struct, or NIL without audio.
+
+   THE SAMPLE TYPE COMES FROM THE DECODER, not from an assumption here.  Opus decodes to floats and
+   AAC and Layer II to sixteen-bit integers, and joining the pieces into an array of the wrong type
+   fails on the first sample rather than quietly rounding — which is the good outcome, but only
+   because someone noticed."
+  (let ((chunks '()) (rate 48000) (channels 2) (format :pcm16))
     (loop for pcm = (next-audio-frame p)
           while pcm
-          do (setf rate (reed:pcm-sample-rate pcm) channels (reed:pcm-channels pcm))
+          do (setf rate (reed:pcm-sample-rate pcm) channels (reed:pcm-channels pcm)
+                   format (reed:pcm-format pcm))
              (push (reed:pcm-samples pcm) chunks))
     (when chunks
       (let* ((total (reduce #'+ chunks :key #'length))
-             (all (make-array total :element-type '(signed-byte 16)))
+             (all (make-array total :element-type (if (eq format :float32)
+                                                      'single-float '(signed-byte 16))))
              (o 0))
         (dolist (c (nreverse chunks))
           (replace all c :start1 o)
           (incf o (length c)))
-        (reed:make-pcm :samples all :channels channels :sample-rate rate)))))
+        (reed:make-pcm :samples all :channels channels :sample-rate rate :format format
+                       :frame-count (floor total (max 1 channels)))))))
 
 ;;; ---- convenience output ------------------------------------------------------------
 
