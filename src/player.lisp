@@ -119,6 +119,12 @@
       ;; before a single frame is read — which is where it should be found out
       (when (and vt (equal (track-codec-id vt) "V_FFV1"))
         (handler-case
+            ;; NO CONFIGURATION RECORD AT ALL means versions 0 or 1, which keep their header in the
+            ;; first key frame.  Nothing about the stream is known here except its size, so the
+            ;; layout cannot be checked until a picture has been decoded — see below, where it is.
+            (if (zerop (length (track-codec-private vt)))
+                (setf ffv1 (reel.ffv1:make-ffv1-decoder-for-frames
+                            :width (track-width vt) :height (track-height vt)))
             (let ((cfg (reel.ffv1:parse-configuration
                         (coerce (track-codec-private vt)
                                 '(simple-array (unsigned-byte 8) (*))))))
@@ -133,7 +139,7 @@
                            (zerop (reel.ffv1:cfg-colorspace cfg)))
                 (error "this FFV1 stream is not 4:2:0, which is the only layout this player's ~
                         picture type can carry"))
-              (setf ffv1 (reel.ffv1:make-ffv1-decoder cfg)))
+              (setf ffv1 (reel.ffv1:make-ffv1-decoder cfg))))
           (error (e)
             (push (track-codec-id vt) unsupported)
             (setf note (princ-to-string e) vt nil ffv1 nil))))
@@ -426,9 +432,18 @@
         (let* ((fr (reel.ffv1:decode-frame (player-ffv1 p)
                                            (coerce (frame-data f)
                                                    '(simple-array (unsigned-byte 8) (*)))))
-               (out (reel.ffv1:as-picture fr)))
-          (setf (picture-timestamp out) (frame-timestamp f scale))
-          (return-from next-video-frame out))))
+               (cfg (reel.ffv1::d-cfg (player-ffv1 p))))
+          ;; A version 0 or 1 stream's layout is only known once its first key frame has been read,
+          ;; so the check that would have happened at open time happens here instead — once, and
+          ;; still before a picture at the wrong size can escape.
+          (unless (and (= 1 (reel.ffv1::cfg-chroma-h-shift cfg))
+                       (= 1 (reel.ffv1::cfg-chroma-v-shift cfg))
+                       (zerop (reel.ffv1:cfg-colorspace cfg)))
+            (error "this FFV1 stream is not 4:2:0, which is the only layout this player's ~
+                    picture type can carry"))
+          (let ((out (reel.ffv1:as-picture fr)))
+            (setf (picture-timestamp out) (frame-timestamp f scale))
+            (return-from next-video-frame out)))))
     ;; Theora, like FFV1, hands out one picture per packet in order: it has no B pictures and no
     ;; reordering, so the packet's own timestamp is the picture's.
     (when (player-theora p)

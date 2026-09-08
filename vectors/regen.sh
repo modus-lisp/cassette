@@ -240,6 +240,21 @@ for f in ffv1-a ffv1-16sl ffv1-dflttab; do
 done
 ffmpeg -hide_banner -loglevel error -y -i ffv1-422.mkv -f rawvideo -pix_fmt yuv422p ffv1-422.yuv
 ffmpeg -hide_banner -loglevel error -y -i ffv1-rgb.mkv -f rawvideo -pix_fmt gbrp    ffv1-rgb.yuv
+#
+# `-coder 0' selects the Rice coder and is ffmpeg's DEFAULT, so it is at least as common as the
+# archival setting.  `-level 0' and `-level 1' keep the header in the first key frame rather than in
+# the container, which is why those files have an empty CodecPrivate.
+#
+#   ffmpeg -f lavfi -i "$S" -c:v ffv1 -level 3 -coder 0 -slices 4 -pix_fmt yuv420p ffv1-rice.mkv
+#   ffmpeg -f lavfi -i "$S" -c:v ffv1 -level 3 -coder 0 -slices 1 -pix_fmt yuv420p ffv1-rice1.mkv
+#   ffmpeg -f lavfi -i "$S" -c:v ffv1 -level 3 -coder 0 -slices 4 -pix_fmt gbrp    ffv1-rice-rgb.mkv
+#   for lv in 0 1; do for cd in 0 1; do
+#     ffmpeg -f lavfi -i "$S" -c:v ffv1 -level $lv -coder $cd -pix_fmt yuv420p ffv1-v$lv-c$cd.mkv
+#   done; done
+for f in ffv1-rice ffv1-rice1 ffv1-v0-c0 ffv1-v0-c1 ffv1-v1-c0 ffv1-v1-c1; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.mkv" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
+ffmpeg -hide_banner -loglevel error -y -i ffv1-rice-rgb.mkv -f rawvideo -pix_fmt gbrp ffv1-rice-rgb.yuv
 
 # ---- Ogg ------------------------------------------------------------------------------------------
 #
