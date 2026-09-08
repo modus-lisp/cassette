@@ -29,6 +29,7 @@
   (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
   vorbis                                        ; reed Vorbis decoder state or NIL
+  flac                                          ; reed FLAC decoder state or NIL
   aac                                           ; reed AAC decoder state or NIL
   mp2                                           ; reed MPEG audio Layer II decoder state or NIL
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
@@ -73,7 +74,7 @@
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
   ;; separately.  The two containers only ever disagreed about the NAME.
-  (member codec '("A_OPUS" "A_AAC" "A_MPEG/L2" "A_VORBIS") :test #'equal))
+  (member codec '("A_OPUS" "A_AAC" "A_MPEG/L2" "A_VORBIS" "A_FLAC") :test #'equal))
 
 (defun open-media (source &key (audio t))
   "Open a WebM or an MP4 from SOURCE (a pathname, a namestring, or an octet vector), whichever
@@ -214,6 +215,12 @@
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
        :vorbis (and at (equal (track-codec-id at) "A_VORBIS") *%vorbis-dec*)
+       ;; Matroska keeps the native FLAC header — `fLaC' and its metadata blocks — in
+       ;; CodecPrivate, so the same parser that reads a .flac file reads it here.
+       :flac (and at (equal (track-codec-id at) "A_FLAC")
+                  (reed:make-flac-decoder-for-header
+                   (coerce (track-codec-private at)
+                           '(simple-array (unsigned-byte 8) (*)))))
        :mp2 (and at (equal (track-codec-id at) "A_MPEG/L2") (reed:make-mp2-decoder #()))
        :aac (and at (equal (track-codec-id at) "A_AAC")
                  (reed:make-aac-decoder :asc (track-codec-private at)
@@ -548,6 +555,10 @@
       (when f
         (values (cond ((player-aac p) (reed:decode-aac-packet (player-aac p) (frame-data f)))
                       ((player-mp2 p) (reed:decode-mp2-packet (player-mp2 p) (frame-data f)))
+                      ((player-flac p)
+                       (reed:decode-flac-packet (player-flac p)
+                                                (coerce (frame-data f)
+                                                        '(simple-array (unsigned-byte 8) (*)))))
                       ((player-vorbis p)
                        ;; a lapped transform has nothing to lap against until the second packet,
                        ;; so the first one legitimately yields nothing and the caller wants the

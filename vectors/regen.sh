@@ -339,3 +339,11 @@ ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=15:duration=3" \
        -c:v libvpx -b:v 200k -c:a libvorbis -q:a 4 vp8-vorbis.webm
 ffmpeg -y -v error -i vp8-vorbis.webm -vn vp8-vorbis.wav
 ffmpeg -y -v error -i theora-av.ogv -vn theora-av.wav
+
+# ---- FLAC, which is lossless and so is checked with EQUALP rather than a tolerance -------------
+# Matroska keeps the native FLAC header in CodecPrivate and one FLAC frame per block.  The decoder's
+# own correctness is reed's to assert (corpus/flac_*.flac, sixteen fixtures against both the
+# STREAMINFO MD5 and ffmpeg); this fixture is about the container carrying it.
+ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=15:duration=3" \
+       -i ../../reed/corpus/music_src.wav -t 3 -c:v libvpx -b:v 200k -c:a flac vp8-flac.mkv
+ffmpeg -y -v error -i vp8-flac.mkv -vn -f s16le vp8-flac.s16
