@@ -266,9 +266,20 @@
                (%es-append e bytes start end pts))))
       (if (eq (ms-kind m) :ps)
           (%ps-walk bytes (lambda (id start end pts)
-                            (when (or (%video-stream-id-p id) (%audio-stream-id-p id)
-                                      (= id #xbd))
-                              (piece id nil start end pts))))
+                            (cond
+                              ;; PRIVATE STREAM 1 IS A BUNDLE, not a stream.  A DVD puts AC-3, DTS,
+                              ;; linear PCM and the subpicture bitmaps all in stream #xbd and tells
+                              ;; them apart with a substream byte at the head of every PES payload,
+                              ;; followed by a frame count and the offset of the first frame header
+                              ;; — four bytes in total that are not part of the audio.  Feeding them
+                              ;; to a decoder makes it look for a sync word and find #x8003, which
+                              ;; is the substream id and the frame count.
+                              ((= id #xbd)
+                               (when (and (< (+ start 4) end)
+                                          (<= #x80 (aref bytes start) #x87))   ; AC-3 substreams
+                                 (piece id nil (+ start 4) end pts)))
+                              ((or (%video-stream-id-p id) (%audio-stream-id-p id))
+                               (piece id nil start end pts)))))
           ;; a transport stream reassembles PES packets across cells before any of this
           (multiple-value-bind (size offset) (%ts-packet-size bytes)
             (multiple-value-bind (pmt streams) (%parse-pat-pmt bytes size offset)
@@ -403,6 +414,21 @@
       (when (<= (first m) offset)
         (when (or (null best) (> (first m) (first best))) (setf best m))))))
 
+(defun %ac3-cuts (buf n)
+  "Where each AC-3 frame begins, by the same method the MPEG audio walk uses: parse a header, jump
+   its stated length, and believe the candidate only once the next one syncs as well."
+  (let ((cuts '()) (i 0))
+    (declare (type fixnum i))
+    (loop
+      (when (>= (+ i 6) n) (return))
+      (let ((len (and (= #x0b (aref buf i)) (= #x77 (aref buf (1+ i)))
+                      (reed:ac3-frame-length buf i))))
+        (if (and len (plusp len) (<= (+ i len 2) n)
+                 (= #x0b (aref buf (+ i len))) (= #x77 (aref buf (+ i len 1))))
+            (progn (when (plusp i) (push i cuts)) (incf i len))
+            (incf i))))
+    (nreverse cuts)))
+
 (defun %split-access-units (e codec track)
   "Cut one elementary stream into frames.  Returns a list of (file-offset . frame), so that the
    caller can put several tracks back into the order they were transmitted in."
@@ -412,6 +438,7 @@
                      ((equal codec "V_MPEG4/ISO/AVC") (%h264-cuts buf n))
                      ((member codec '("A_MPEG/L2" "A_MPEG/L3") :test #'equal)
                       (%mpeg-audio-cuts buf n))
+                     ((equal codec "A_AC3") (%ac3-cuts buf n))
                      (t '())))
          (bounds (append '(0) cuts (list n)))
          (out '()))

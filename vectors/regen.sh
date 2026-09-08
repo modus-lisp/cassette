@@ -347,3 +347,17 @@ ffmpeg -y -v error -i theora-av.ogv -vn theora-av.wav
 ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=15:duration=3" \
        -i ../../reed/corpus/music_src.wav -t 3 -c:v libvpx -b:v 200k -c:a flac vp8-flac.mkv
 ffmpeg -y -v error -i vp8-flac.mkv -vn -f s16le vp8-flac.s16
+
+# ---- AC-3, which is why a DVD used to play silently --------------------------------------------
+# Two containers, and the program stream is the interesting one: a DVD does not put AC-3 in a
+# stream of its own, it puts it inside PRIVATE STREAM 1 along with DTS, linear PCM and the
+# subpicture bitmaps, distinguished by a substream byte and preceded by a four-byte header that is
+# not part of the audio.  Feeding those four bytes to a decoder makes it hunt for a sync word and
+# find 0x8003 — the substream id and a frame count.
+ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=15:duration=3" \
+       -i ../../reed/corpus/music_src.wav -t 3 -c:v libvpx -b:v 200k -c:a ac3 -b:a 192k vp8-ac3.mkv
+ffmpeg -y -v error -i vp8-ac3.mkv -vn -f s16le vp8-ac3.s16
+ffmpeg -y -v error -f lavfi -i "testsrc2=size=352x288:rate=25:duration=3" \
+       -i ../../reed/corpus/music_src.wav -t 3 -c:v mpeg2video -b:v 1500k -c:a ac3 -b:a 192k \
+       -f vob ac3-ps.vob
+ffmpeg -y -v error -i ac3-ps.vob -vn -f s16le ac3-ps.s16
