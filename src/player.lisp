@@ -29,6 +29,7 @@
   mp2                                           ; reed MPEG audio Layer II decoder state or NIL
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
   mpeg4                                         ; reel.mpeg4 decoder state or NIL
+  ffv1                                          ; reel.ffv1 decoder state or NIL
   ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
   (mpeg2-ready '())
   (mpeg2-stamps '())
@@ -47,8 +48,20 @@
   (eof nil))
 
 (defun %decodable-video-p (codec)
-  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP")
+  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP" "V_FFV1")
           :test #'equal))
+
+(defun %vfw-codec (private)
+  "What a Matroska `V_MS/VFW/FOURCC' track really holds, and where its real CodecPrivate begins.
+
+   VFW is Matroska's escape hatch for codecs that predate a proper mapping: the CodecPrivate is a
+   Windows BITMAPINFOHEADER with the codec's own extra data glued on the end.  FFV1 is written this
+   way by every muxer in practice, so a reader that does not open the envelope sees a container with
+   nothing decodable in it."
+  (when (and private (>= (length private) 40))
+    (let ((fourcc (string-upcase (map 'string #'code-char (subseq private 16 20)))))
+      (values (cdr (assoc fourcc +avi-video-codecs+ :test #'string=))
+              (if (> (length private) 40) (subseq private 40) nil)))))
 (defun %decodable-audio-p (codec)
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
@@ -80,7 +93,11 @@
            (at (and audio (cond (mp4p (mp4-audio-track c)) (avip (avi-audio-track c))
                                 (sysp (mpegsys-audio-track c))
                                 (t (webm-audio-track c)))))
-           (unsupported '()) (note nil) (h264 nil))
+           (unsupported '()) (note nil) (h264 nil) (ffv1 nil))
+      ;; a VFW-wrapped Matroska track names its codec inside the envelope
+      (when (and vt (equal (track-codec-id vt) "V_MS/VFW/FOURCC"))
+        (multiple-value-bind (codec extra) (%vfw-codec (track-codec-private vt))
+          (when codec (setf (track-codec-id vt) codec (track-codec-private vt) extra))))
       (when (and vt (not (%decodable-video-p (track-codec-id vt))))
         (push (track-codec-id vt) unsupported)
         (setf note (format nil "~a is not a codec this decodes" (track-codec-id vt)))
@@ -94,6 +111,28 @@
           (error (e)
             (push (track-codec-id vt) unsupported)
             (setf note (princ-to-string e) vt nil h264 nil))))
+      ;; FFV1's whole configuration is in the container, so a stream this cannot decode is known
+      ;; before a single frame is read — which is where it should be found out
+      (when (and vt (equal (track-codec-id vt) "V_FFV1"))
+        (handler-case
+            (let ((cfg (reel.ffv1:parse-configuration
+                        (coerce (track-codec-private vt)
+                                '(simple-array (unsigned-byte 8) (*))))))
+              (setf (reel.ffv1::cfg-width cfg) (track-width vt)
+                    (reel.ffv1::cfg-height cfg) (track-height vt))
+              ;; THE DECODER HANDLES 4:2:2 AND RGB; THE PICTURE THIS PLAYER HANDS OUT DOES NOT.
+              ;; One picture type serves every codec here and it is 4:2:0, so a stream in another
+              ;; layout is turned away rather than delivered at the wrong size — which is the same
+              ;; rule the codecs follow, applied one level up.
+              (unless (and (= 1 (reel.ffv1::cfg-chroma-h-shift cfg))
+                           (= 1 (reel.ffv1::cfg-chroma-v-shift cfg))
+                           (zerop (reel.ffv1:cfg-colorspace cfg)))
+                (error "this FFV1 stream is not 4:2:0, which is the only layout this player's ~
+                        picture type can carry"))
+              (setf ffv1 (reel.ffv1:make-ffv1-decoder cfg)))
+          (error (e)
+            (push (track-codec-id vt) unsupported)
+            (setf note (princ-to-string e) vt nil ffv1 nil))))
       (when (and at (not (%decodable-audio-p (track-codec-id at))))
         (push (track-codec-id at) unsupported)
         (setf at nil))
@@ -115,6 +154,7 @@
                    (reel.mpeg2:make-decoder))
        :mpeg4 (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/ASP")
                    (reel.mpeg4:make-decoder))
+       :ffv1 (and vt (equal (track-codec-id vt) "V_FFV1") ffv1)
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
@@ -357,6 +397,17 @@
         (when (player-h264-ready p)
           (return-from next-video-frame (pop (player-h264-ready p))))
         (unless (%h264-fill-batch p vt scale) (return-from next-video-frame nil))))
+    ;; FFV1 has no reordering at all — every packet is exactly one picture — so it needs none of
+    ;; the queue machinery the others do
+    (when (player-ffv1 p)
+      (let ((f (%next-frame-for p vt)))
+        (when (null f) (return-from next-video-frame nil))
+        (let* ((fr (reel.ffv1:decode-frame (player-ffv1 p)
+                                           (coerce (frame-data f)
+                                                   '(simple-array (unsigned-byte 8) (*)))))
+               (out (reel.ffv1:as-picture fr)))
+          (setf (picture-timestamp out) (frame-timestamp f scale))
+          (return-from next-video-frame out))))
     ;; MPEG video goes through a queue for the same reason H.264 does, and it is worth saying
     ;; plainly: ONE ACCESS UNIT IS NOT ONE PICTURE OUT.  A decoder holds each reference picture back
     ;; until the next one arrives, so feeding a P picture yields the I picture before it, and the

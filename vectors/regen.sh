@@ -224,3 +224,19 @@ ffmpeg -hide_banner -loglevel error -y -idct simple -i asp.avi -vsync 0 \
 #   ffmpeg -f lavfi -i "$S" -f lavfi -i "$A" -c:v mpeg2video -g 12 -bf 2 -b:v 400k \
 #          -c:a mp2 -b:a 192k -ac 2 -pix_fmt yuv420p -shortest -f vob m2-av.mpg
 #   ...m2-av.ts with -f mpegts
+
+# ---- FFV1 -----------------------------------------------------------------------------------------
+#
+# The lossless codec archives keep masters in, so the oracle is bit-exact or nothing.  The fixtures
+# cover what varies between real files: chroma layout, slice count, which of the two range coder
+# state tables the stream chose, and the reversible colour transform that makes lossless RGB work.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.4"
+#   ffmpeg -f lavfi -i "$S" -c:v ffv1 -level 3 -coder 1 -slices 4  -pix_fmt yuv420p ffv1-a.mkv
+#   ...ffv1-422 with -pix_fmt yuv422p, ffv1-16sl with -slices 16, ffv1-dflttab with -coder 2,
+#      ffv1-rgb with -pix_fmt gbrp
+for f in ffv1-a ffv1-16sl ffv1-dflttab; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.mkv" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
+ffmpeg -hide_banner -loglevel error -y -i ffv1-422.mkv -f rawvideo -pix_fmt yuv422p ffv1-422.yuv
+ffmpeg -hide_banner -loglevel error -y -i ffv1-rgb.mkv -f rawvideo -pix_fmt gbrp    ffv1-rgb.yuv
