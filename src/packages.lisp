@@ -32,6 +32,10 @@
    #:mp4-video-track #:mp4-audio-track #:mp4-fragmented #:mp4-bytes
    #:make-mp4-reader #:read-next-mp4-frame #:seek-mp4 #:mp4-sync-sample-before
    #:sample-table #:st-count #:st-timescale #:st-time-seconds #:st-sync
+   ;; MPEG-2 Systems: program streams and transport streams
+   #:parse-mpegsys #:mpegsys #:ms-tracks #:ms-duration #:ms-kind
+   #:mpegsys-video-track #:mpegsys-audio-track #:mpegts-p #:mpegps-p
+   #:make-mpegsys-reader #:read-next-mpegsys-frame #:mpegsys-tick
    ;; muxer
    #:make-muxer #:add-video-track #:add-audio-track #:add-frame #:finish-webm
    #:write-webm-file #:muxer

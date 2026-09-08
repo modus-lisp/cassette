@@ -144,3 +144,40 @@ ffmpeg -hide_banner -loglevel error -y -i fast.mp4 -f rawvideo -pix_fmt yuv420p 
 for f in hp-plain hp-cqm hp-8x8 hp-8x8c hp-real; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
+
+# ---- MPEG-1 and MPEG-2 ---------------------------------------------------------------------------
+#
+# THE ORACLE TAKES TWO ARGUMENTS THE OTHERS DO NOT, and both matter.
+#
+#   -idct simple   MPEG-2 does not specify its inverse transform exactly; it requires only the
+#                  accuracy of IEEE 1180, and ffmpeg ships several transforms that all meet it and
+#                  disagree in the last bit.  Naming one is what makes "bit-exact" mean anything.
+#   -vsync 0       without it ffmpeg may duplicate a frame to fill a frame rate, and then every
+#                  frame after the duplicate compares against its neighbour.
+#
+# The fixtures are spread across the features that are genuinely separate code: MPEG-1 as well as
+# MPEG-2, both scan orders, both quantiser ladders, the alternative intra coefficient table, custom
+# weight matrices, interlaced coding (field DCT and field motion inside a frame picture), and a
+# width where ffmpeg's MPEG-1 encoder starts putting several rows in one slice.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=1"
+#   ffmpeg -f lavfi -i "$S" -c:v mpeg2video -g 12 -bf 2 -qscale:v 4 -pix_fmt yuv420p m2-basic.m2v
+#   ...m2-mpeg1 with -c:v mpeg1video, m2-ivlc with -intra_vlc 1, m2-altscan with -alternate_scan 1,
+#      m2-nlq with -non_linear_quant 1 -qmax 28 -b:v 400k, m2-ilace with -flags +ilme+ildct,
+#      m2-cqm with -intra_matrix "8,17,18,...", m2-mpeg1-wide and m2-cif at 352x288
+#
+# The four system-stream fixtures are the same picture in four framings: a program stream, a
+# transport stream, an MPEG-1 program stream, and H.264 in a transport stream — which is what
+# broadcast television is, and the reason the transport demuxer earns its keep.
+#
+#   ffmpeg -f lavfi -i "$S" -c:v mpeg2video -g 12 -bf 2 -b:v 400k -pix_fmt yuv420p -f vob m2-ps.mpg
+#   ...m2-ts.ts with -f mpegts, m1-ps.mpg with -c:v mpeg1video -f mpeg,
+#      h264-ts.ts with -c:v libx264 -preset fast -crf 26 -f mpegts
+for f in m2-basic m2-mpeg1 m2-mpeg1-wide m2-ilace m2-altscan m2-ivlc m2-cqm m2-nlq m2-cif; do
+  ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f.m2v" -vsync 0 \
+         -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
+for f in m2-ps.mpg m2-ts.ts m1-ps.mpg h264-ts.ts; do
+  ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f" -vsync 0 \
+         -f rawvideo -pix_fmt yuv420p "${f%.*}.yuv"
+done

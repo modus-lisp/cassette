@@ -26,6 +26,10 @@
   (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
   aac                                           ; reed AAC decoder state or NIL
+  mpeg2                                         ; reel.mpeg2 decoder state or NIL
+  ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
+  (mpeg2-ready '())
+  (mpeg2-stamps '())
   (pending-audio '())                           ; frames read past a video frame
   (pending-video '())
   (need-key nil)                                ; after a seek: skip to the next key frame
@@ -41,7 +45,7 @@
   (eof nil))
 
 (defun %decodable-video-p (codec)
-  (member codec '("V_VP8" "V_MPEG4/ISO/AVC") :test #'equal))
+  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2") :test #'equal))
 (defun %decodable-audio-p (codec)
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
@@ -55,12 +59,20 @@
    Tracks whose codec this image cannot decode are left out of VIDEO-TRACK / AUDIO-TRACK and
    named in PLAYER-UNSUPPORTED instead, so a file that is half playable plays half."
   (let* ((bytes (if (or (stringp source) (pathnamep source)) (slurp-file source) source))
-         (mp4p (and (not (webm-p bytes)) (mp4-p bytes))))
-    (unless (or mp4p (webm-p bytes))
-      (%err "not a WebM or MP4 file"))
-    (let* ((c (if mp4p (parse-mp4 bytes) (parse-webm bytes)))
-           (vt (if mp4p (mp4-video-track c) (webm-video-track c)))
-           (at (and audio (if mp4p (mp4-audio-track c) (webm-audio-track c))))
+         (mp4p (and (not (webm-p bytes)) (mp4-p bytes)))
+         (sysp (and (not mp4p) (not (webm-p bytes))
+                    (or (mpegts-p bytes) (mpegps-p bytes))))
+         (sys-frames nil))
+    (unless (or mp4p sysp (webm-p bytes))
+      (%err "not a WebM, MP4, program stream or transport stream"))
+    (let* ((c (cond (mp4p (parse-mp4 bytes))
+                    (sysp (multiple-value-bind (m fr) (parse-mpegsys bytes)
+                            (setf sys-frames fr) m))
+                    (t (parse-webm bytes))))
+           (vt (cond (mp4p (mp4-video-track c)) (sysp (mpegsys-video-track c))
+                     (t (webm-video-track c))))
+           (at (and audio (cond (mp4p (mp4-audio-track c)) (sysp (mpegsys-audio-track c))
+                                (t (webm-audio-track c)))))
            (unsupported '()) (note nil) (h264 nil))
       (when (and vt (not (%decodable-video-p (track-codec-id vt))))
         (push (track-codec-id vt) unsupported)
@@ -79,15 +91,19 @@
         (push (track-codec-id at) unsupported)
         (setf at nil))
       (make-webm-player
-       :kind (if mp4p :mp4 :webm)
+       :kind (cond (mp4p :mp4) (sysp :mpegsys) (t :webm))
        :webm c
-       :tick (if mp4p +mp4-tick+ (webm-timecode-scale c))
+       :tick (cond (mp4p +mp4-tick+) (sysp (mpegsys-tick c)) (t (webm-timecode-scale c)))
        :unsupported (nreverse unsupported)
        :video-note note
        :video-track vt :audio-track at
-       :reader (if mp4p (make-mp4-reader c) (make-block-reader c))
+       :reader (cond (mp4p (make-mp4-reader c))
+                     (sysp (make-mpegsys-reader c sys-frames))
+                     (t (make-block-reader c)))
        :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
        :h264 h264
+       :mpeg2 (and vt (member (track-codec-id vt) '("V_MPEG1" "V_MPEG2") :test #'equal)
+                   (reel.mpeg2:make-decoder))
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
@@ -119,9 +135,10 @@
 
 (defun %advance-reader (p)
   "The next frame from whichever demuxer this player is holding."
-  (if (eq (player-kind p) :mp4)
-      (read-next-mp4-frame (player-reader p))
-      (read-next-frame (player-reader p))))
+  (case (player-kind p)
+    (:mp4 (read-next-mp4-frame (player-reader p)))
+    (:mpegsys (read-next-mpegsys-frame (player-reader p)))
+    (t (read-next-frame (player-reader p)))))
 
 (defun player-eof-p (p) (player-eof p))
 
@@ -193,6 +210,17 @@
    batches scale better and cost more latency on a seek, because the first picture after one is not
    ready until its whole batch is.  Eight is a third of a second of video and about 60 ms of work.")
 
+(defun %nals-of (p f)
+  "The NAL units of one sample, however this container frames them.
+
+   MP4 and Matroska prefix each unit with its length; a transport or program stream carries the
+   Annex B byte stream with start codes, exactly as a `.h264' file does.  Reading one as the other
+   fails immediately and loudly — a length prefix read as a start code has the forbidden zero bit
+   set — which is the one mercy in it."
+  (if (eq (player-kind p) :mpegsys)
+      (reel.h264:annex-b-nals (frame-data f))
+      (reel.h264:length-prefixed-nals (frame-data f) :length-size (player-nal-length p))))
+
 (defun %h264-fill-batch (p vt scale)
   "Read ahead up to *H264-READ-AHEAD* samples and decode their pictures at once.
 
@@ -209,9 +237,7 @@
                  ((and (player-need-key p) (not (frame-keyframe-p f))))
                  (t
                   (setf (player-need-key p) nil)
-                  (push (reel.h264:length-prefixed-nals (frame-data f)
-                                                        :length-size (player-nal-length p))
-                        aus)
+                  (push (%nals-of p f) aus)
                   (push (frame-timestamp f scale) stamps)
                   (incf n)))))
     (setf aus (nreverse aus) stamps (nreverse stamps))
@@ -256,6 +282,39 @@
                   (setf (picture-timestamp out) (pop (player-h264-stamps p)))
                   out)))
 
+(defun %mpeg2-claim (p pics)
+  "Attach presentation times to pictures that have come out in display order.
+
+   The times of the samples fed are held sorted, and each picture takes the earliest still
+   unclaimed.  Sorted, the pending times ARE display order — which is the whole reason this works
+   without the decoder having to report anything about ordering."
+  (loop for pic in pics
+        collect (let ((out (reel.mpeg2:as-picture pic)))
+                  (when (player-mpeg2-stamps p)
+                    (setf (picture-timestamp out) (pop (player-mpeg2-stamps p))))
+                  out)))
+
+(defun %mpeg2-fill (p vt scale)
+  "Feed one access unit and queue whatever pictures that released.  NIL at the end of the stream."
+  (let ((f (%next-frame-for p vt)))
+    (cond
+      ((null f)
+       (let ((tail (ignore-errors (reel.mpeg2:flush-decoder (player-mpeg2 p)))))
+         (when tail
+           (setf (player-mpeg2-ready p) (%mpeg2-claim p tail))
+           (return-from %mpeg2-fill t))
+         nil))
+      (t
+       (when (player-need-key p)
+         (if (frame-keyframe-p f)
+             (setf (player-need-key p) nil)
+             (return-from %mpeg2-fill t)))
+       (setf (player-mpeg2-stamps p)
+             (merge 'list (player-mpeg2-stamps p) (list (frame-timestamp f scale)) #'<))
+       (let ((pics (reel.mpeg2:feed-bytes (player-mpeg2 p) (frame-data f))))
+         (setf (player-mpeg2-ready p) (%mpeg2-claim p pics)))
+       t))))
+
 (defun next-video-frame (p)
   "Decode and return the next *displayed* video PICTURE (timestamp set in
    seconds), or NIL at end of stream.  Hidden frames (altref) are decoded
@@ -271,6 +330,15 @@
         (when (player-h264-ready p)
           (return-from next-video-frame (pop (player-h264-ready p))))
         (unless (%h264-fill-batch p vt scale) (return-from next-video-frame nil))))
+    ;; MPEG video goes through a queue for the same reason H.264 does, and it is worth saying
+    ;; plainly: ONE ACCESS UNIT IS NOT ONE PICTURE OUT.  A decoder holds each reference picture back
+    ;; until the next one arrives, so feeding a P picture yields the I picture before it, and the
+    ;; presentation time on the sample just fed belongs to a picture that has not come out yet.
+    (when (player-mpeg2 p)
+      (loop
+        (when (player-mpeg2-ready p)
+          (return-from next-video-frame (pop (player-mpeg2-ready p))))
+        (unless (%mpeg2-fill p vt scale) (return-from next-video-frame nil))))
     (loop
      (block skip
       (let ((f (%next-frame-for p vt)))
@@ -281,8 +349,7 @@
           ((player-h264 p)
            ;; an MP4/Matroska sample is a run of length-prefixed NAL units, not a byte stream
            (let ((pic nil))
-             (dolist (n (reel.h264:length-prefixed-nals
-                         (frame-data f) :length-size (player-nal-length p)))
+             (dolist (n (%nals-of p f))
                (let ((r (reel.h264:feed-nal (player-h264 p) n)))
                  (when r (setf pic r))))
              (when pic
