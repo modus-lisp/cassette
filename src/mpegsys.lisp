@@ -344,6 +344,58 @@
                    (t nil)))))
     (nreverse cuts)))
 
+(defun %mpeg-audio-cuts (buf n)
+  "Where each MPEG audio frame begins.
+
+   There is no start code: a frame begins with eleven set bits and its own length is computed from
+   the four fields after them.  So the walk is `parse a header, jump its length, expect another' —
+   and a candidate is only believed once the header AFTER it also parses, because eleven set bits
+   occur often enough inside coded audio to find by accident."
+  (let ((cuts '()) (i 0))
+    (declare (type fixnum i))
+    (loop
+      (when (>= (+ i 4) n) (return))
+      (if (and (= #xff (aref buf i)) (= #xe0 (logand (aref buf (1+ i)) #xe0)))
+          (let ((len (%mpeg-audio-frame-length buf i)))
+            (if (and len (plusp len) (<= (+ i len 4) n)
+                     (= #xff (aref buf (+ i len)))
+                     (= #xe0 (logand (aref buf (+ i len 1)) #xe0)))
+                (progn (when (plusp i) (push i cuts)) (incf i len))
+                (incf i)))
+          (incf i)))
+    (nreverse cuts)))
+
+(defparameter +mpeg-audio-bitrates+
+  #(#(0 32 64 96 128 160 192 224 256 288 320 352 384 416 448 0)     ; MPEG-1 Layer I
+    #(0 32 48 56 64 80 96 112 128 160 192 224 256 320 384 0)        ; MPEG-1 Layer II
+    #(0 32 40 48 56 64 80 96 112 128 160 192 224 256 320 0)         ; MPEG-1 Layer III
+    #(0 32 48 56 64 80 96 112 128 144 160 176 192 224 256 0)        ; MPEG-2 Layer I
+    #(0 8 16 24 32 40 48 56 64 80 96 112 128 144 160 0))            ; MPEG-2 Layers II and III
+  "Bit rates in kbit/s, by layer and version.  Three tables for MPEG-1 and two for the half-rate
+   versions, because the layers do not agree about what an index means.")
+
+(defparameter +mpeg-audio-rates+ #(44100 48000 32000 0))
+
+(defun %mpeg-audio-frame-length (buf i)
+  "The length in bytes of the MPEG audio frame whose header starts at I, or NIL if it is not one."
+  (let* ((ver (ldb (byte 2 3) (aref buf (1+ i))))
+         (layer (ldb (byte 2 1) (aref buf (1+ i))))
+         (br-idx (ldb (byte 4 4) (aref buf (+ i 2))))
+         (sr-idx (ldb (byte 2 2) (aref buf (+ i 2))))
+         (pad (ldb (byte 1 1) (aref buf (+ i 2)))))
+    (when (or (= ver 1) (zerop layer) (zerop br-idx) (= br-idx 15) (= sr-idx 3))
+      (return-from %mpeg-audio-frame-length nil))
+    (let* ((mpeg1 (= ver 3))
+           (lnum (case layer (3 1) (2 2) (t 3)))
+           (tbl (if mpeg1 (1- lnum) (if (= lnum 1) 3 4)))
+           (rate (* 1000 (aref (aref +mpeg-audio-bitrates+ tbl) br-idx)))
+           (sr (let ((r (aref +mpeg-audio-rates+ sr-idx)))
+                 (cond (mpeg1 r) ((= ver 2) (floor r 2)) (t (floor r 4))))))
+      (when (or (zerop rate) (zerop sr)) (return-from %mpeg-audio-frame-length nil))
+      (if (= lnum 1)
+          (* 4 (+ (floor (* 12 rate) sr) pad))
+          (+ (floor (* (if (or mpeg1 (= lnum 2)) 144 72) rate) sr) pad)))))
+
 (defun %mark-at (marks offset)
   "The mark for the packet that supplied byte OFFSET: (elementary-offset pts file-offset)."
   (let ((best nil))
@@ -358,6 +410,8 @@
          (marks (sort (copy-list (es-marks e)) #'< :key #'first))
          (cuts (cond ((member codec '("V_MPEG1" "V_MPEG2") :test #'equal) (%mpeg-video-cuts buf n))
                      ((equal codec "V_MPEG4/ISO/AVC") (%h264-cuts buf n))
+                     ((member codec '("A_MPEG/L2" "A_MPEG/L3") :test #'equal)
+                      (%mpeg-audio-cuts buf n))
                      (t '())))
          (bounds (append '(0) cuts (list n)))
          (out '()))
@@ -459,6 +513,20 @@
         (values 0 0))
     (error () (values 0 0))))
 
+(defun %probe-mpeg-audio (buf n)
+  "Which MPEG audio layer a stream holds, from the first frame header that checks out.
+
+   A program stream names its audio tracks by stream id alone, and the id says `MPEG audio' without
+   saying which layer — which matters, because Layer II and Layer III are different decoders that
+   happen to share a frame header."
+  (loop for i of-type fixnum from 0 below (min n 65536)
+        do (when (and (= #xff (aref buf i)) (< (+ i 4) n)
+                      (= #xe0 (logand (aref buf (1+ i)) #xe0))
+                      (%mpeg-audio-frame-length buf i))
+             (return (case (ldb (byte 2 1) (aref buf (1+ i)))
+                       (3 "A_MPEG/L1") (2 "A_MPEG/L2") (t "A_MPEG/L3")))))
+      )
+
 (defun parse-mpegsys (bytes)
   "Read a program stream or a transport stream into tracks and frames.
 
@@ -483,7 +551,7 @@
                            (and (null stype) (%video-stream-id-p key))))
               (codec (cond (declared declared)
                            (video-p (or (%probe-video-codec buf n) "V_UNKNOWN"))
-                           ((and (null stype) (%audio-stream-id-p key)) "A_MPEG/L3")
+                           ((and (null stype) (%audio-stream-id-p key)) (%probe-mpeg-audio buf n))
                            ((and (null stype) (= key #xbd)) "A_AC3")
                            (t "V_UNKNOWN")))
               (w 0) (h 0))
@@ -493,6 +561,12 @@
          ;; container, so the picture size is only knowable by parsing one
          (when (and video-p (equal codec "V_MPEG4/ISO/AVC"))
            (multiple-value-setq (w h) (%h264-size buf n)))
+         ;; A TRANSPORT STREAM'S TABLE SAYS `MPEG AUDIO' AND NOT WHICH LAYER.  Stream types 3 and 4
+         ;; cover Layers I, II and III alike, which are three different decoders that happen to
+         ;; share a frame header — so the layer comes from the first frame, as it does in a program
+         ;; stream, which has no table at all.
+         (when (and (not video-p) (member stype '(#x03 #x04)))
+           (setf codec (or (%probe-mpeg-audio buf n) codec)))
          (let ((tr (make-track :number (incf number)
                                :uid key
                                :type (if video-p 1 2)

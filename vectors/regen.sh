@@ -215,3 +215,12 @@ for f in mp4v-i mp4v-4mv mp4v-b mp4v-mq mp4v-full mp4v-big mp4v-asp; do
 done
 ffmpeg -hide_banner -loglevel error -y -idct simple -i asp.avi -vsync 0 \
        -f rawvideo -pix_fmt yuv420p asp-avi.yuv
+
+# A program stream and a transport stream carrying the SAME video and audio, so that the two
+# demuxers can be checked to agree rather than merely each to work.  The audio is MPEG Layer II,
+# which is what a DVD and a broadcast capture actually carry — and which the container names only as
+# "MPEG audio", leaving the layer to be read out of the first frame header.
+#   S="testsrc2=size=176x144:rate=25:duration=0.6"; A="sine=frequency=440:duration=0.6:sample_rate=48000"
+#   ffmpeg -f lavfi -i "$S" -f lavfi -i "$A" -c:v mpeg2video -g 12 -bf 2 -b:v 400k \
+#          -c:a mp2 -b:a 192k -ac 2 -pix_fmt yuv420p -shortest -f vob m2-av.mpg
+#   ...m2-av.ts with -f mpegts

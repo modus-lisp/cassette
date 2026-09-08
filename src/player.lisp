@@ -26,6 +26,7 @@
   (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
   aac                                           ; reed AAC decoder state or NIL
+  mp2                                           ; reed MPEG audio Layer II decoder state or NIL
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
   mpeg4                                         ; reel.mpeg4 decoder state or NIL
   ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
@@ -52,7 +53,7 @@
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
   ;; separately.  The two containers only ever disagreed about the NAME.
-  (member codec '("A_OPUS" "A_AAC") :test #'equal))
+  (member codec '("A_OPUS" "A_AAC" "A_MPEG/L2") :test #'equal))
 
 (defun open-media (source &key (audio t))
   "Open a WebM or an MP4 from SOURCE (a pathname, a namestring, or an octet vector), whichever
@@ -117,6 +118,7 @@
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
+       :mp2 (and at (equal (track-codec-id at) "A_MPEG/L2") (reed:make-mp2-decoder #()))
        :aac (and at (equal (track-codec-id at) "A_AAC")
                  (reed:make-aac-decoder :asc (track-codec-private at)
                                         :channels (max 1 (or (track-channels at) 2))
@@ -397,9 +399,9 @@
     (unless at (return-from next-audio-frame nil))
     (let ((f (%next-frame-for p at)))
       (when f
-        (values (if (player-aac p)
-                    (reed:decode-aac-packet (player-aac p) (frame-data f))
-                    (reed:decode-opus-packet (player-opus p) (frame-data f)))
+        (values (cond ((player-aac p) (reed:decode-aac-packet (player-aac p) (frame-data f)))
+                      ((player-mp2 p) (reed:decode-mp2-packet (player-mp2 p) (frame-data f)))
+                      (t (reed:decode-opus-packet (player-opus p) (frame-data f))))
                 (frame-timestamp f scale))))))
 
 (defun decode-all-audio (p)

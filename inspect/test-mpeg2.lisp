@@ -128,6 +128,30 @@
           (compare name pics (slurp (format nil "vectors/~a.yuv" name)) what))
       (error (e) (ok (format nil "~a: ~a" name e) nil)))))
 
+(format t "~&== a program stream and a transport stream, video AND sound~%")
+;; The point of having BOTH is that the answer must be identical: the same picture and the same
+;; audio arrive through two containers that have nothing in common above the PES packet.  MPEG audio
+;; Layer II is what a DVD and a broadcast capture actually carry, and until it decoded, a file like
+;; this played perfectly and silently.
+(handler-case
+    (let (a b)
+      (dolist (f '("vectors/m2-av.mpg" "vectors/m2-av.ts"))
+        (let* ((p (cassette:open-media f))
+               (vt (cassette:player-video-track p))
+               (at (cassette:player-audio-track p)))
+          (ok (format nil "~a: MPEG-2 video and Layer II audio, both decodable" f)
+              (and vt at
+                   (equal (cassette:track-codec-id vt) "V_MPEG2")
+                   ;; the container says only "MPEG audio"; the LAYER comes from the frame header
+                   (equal (cassette:track-codec-id at) "A_MPEG/L2")
+                   (null (cassette:player-unsupported p))))
+          (let ((pcm (cassette:decode-all-audio p)))
+            (if a (setf b pcm) (setf a pcm)))))
+      (ok "and the two containers give sample-identical audio"
+          (and a b (equalp (reed:pcm-samples a) (reed:pcm-samples b))
+               (plusp (length (reed:pcm-samples a))))))
+  (error (e) (ok (format nil "program and transport streams with audio: ~a" e) nil)))
+
 (format t "~&== what the containers say is in them~%")
 (handler-case
     (multiple-value-bind (m frames) (cassette:parse-mpegsys (slurp "vectors/h264-ts.ts"))
