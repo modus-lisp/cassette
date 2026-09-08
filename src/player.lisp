@@ -13,6 +13,9 @@
 ;;;; reported — PLAYER-UNSUPPORTED says which codec it was — and the other track still plays.
 (in-package #:cassette)
 
+(defvar *%vorbis-dec* nil
+  "Scratch between OPEN-MEDIA's header work and the MAKE-WEBM-PLAYER call that consumes it.")
+
 (defstruct (webm-player (:conc-name player-))
   (kind :webm)                                  ; :webm or :mp4
   webm                                          ; the WEBM or MP4 container struct
@@ -25,6 +28,7 @@
   h264                                          ; reel.h264 decoder, or NIL
   (nal-length 4)                                ; bytes of length prefix on each MP4 NAL unit
   opus                                          ; reed opus decoder state or NIL
+  vorbis                                        ; reed Vorbis decoder state or NIL
   aac                                           ; reed AAC decoder state or NIL
   mp2                                           ; reed MPEG audio Layer II decoder state or NIL
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
@@ -69,7 +73,7 @@
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
   ;; separately.  The two containers only ever disagreed about the NAME.
-  (member codec '("A_OPUS" "A_AAC" "A_MPEG/L2") :test #'equal))
+  (member codec '("A_OPUS" "A_AAC" "A_MPEG/L2" "A_VORBIS") :test #'equal))
 
 (defun open-media (source &key (audio t))
   "Open a WebM or an MP4 from SOURCE (a pathname, a namestring, or an octet vector), whichever
@@ -158,9 +162,32 @@
           (error (e)
             (push (track-codec-id vt) unsupported)
             (setf note (princ-to-string e) vt nil theora nil))))
-      (when (and at (not (%decodable-audio-p (track-codec-id at))))
-        (push (track-codec-id at) unsupported)
-        (setf at nil))
+      ;; Vorbis, like Theora, is configured by three PACKETS rather than by a blob: from Ogg they
+      ;; are the head of its own logical stream, and from Matroska they are Xiph-laced into
+      ;; CodecPrivate.  Building it here means a stream this cannot decode is found out when the
+      ;; file is opened, and the video still plays.
+      (let ((vorbis-dec nil))
+        (when (and at (equal (track-codec-id at) "A_VORBIS"))
+          (handler-case
+              (let ((headers
+                      (if oggp
+                          (mapcar (lambda (h)
+                                    (coerce h '(simple-array (unsigned-byte 8) (*))))
+                                  (os-headers (ogg-stream-for c at)))
+                          (reed:vorbis-headers-from-xiph
+                           (coerce (track-codec-private at)
+                                   '(simple-array (unsigned-byte 8) (*)))))))
+                (setf vorbis-dec (reed:make-vorbis-decoder-for-headers headers)))
+            (error (e)
+              (declare (ignore e))
+              (setf vorbis-dec nil))))
+        (when (and at (equal (track-codec-id at) "A_VORBIS") (null vorbis-dec))
+          (push (track-codec-id at) unsupported)
+          (setf at nil))
+        (when (and at (not (%decodable-audio-p (track-codec-id at))))
+          (push (track-codec-id at) unsupported)
+          (setf at nil))
+        (setf *%vorbis-dec* vorbis-dec))
       (make-webm-player
        :kind (cond (mp4p :mp4) (avip :avi) (oggp :ogg) (sysp :mpegsys) (t :webm))
        :webm c
@@ -186,6 +213,7 @@
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
+       :vorbis (and at (equal (track-codec-id at) "A_VORBIS") *%vorbis-dec*)
        :mp2 (and at (equal (track-codec-id at) "A_MPEG/L2") (reed:make-mp2-decoder #()))
        :aac (and at (equal (track-codec-id at) "A_AAC")
                  (reed:make-aac-decoder :asc (track-codec-private at)
@@ -520,6 +548,14 @@
       (when f
         (values (cond ((player-aac p) (reed:decode-aac-packet (player-aac p) (frame-data f)))
                       ((player-mp2 p) (reed:decode-mp2-packet (player-mp2 p) (frame-data f)))
+                      ((player-vorbis p)
+                       ;; a lapped transform has nothing to lap against until the second packet,
+                       ;; so the first one legitimately yields nothing and the caller wants the
+                       ;; next frame rather than end-of-stream
+                       (or (reed:decode-vorbis-packet (player-vorbis p)
+                                                      (coerce (frame-data f)
+                                                              '(simple-array (unsigned-byte 8) (*))))
+                           (return-from next-audio-frame (next-audio-frame p))))
                       (t (reed:decode-opus-packet (player-opus p) (frame-data f))))
                 (frame-timestamp f scale))))))
 

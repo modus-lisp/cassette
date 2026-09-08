@@ -326,3 +326,16 @@ ffmpeg -hide_banner -loglevel error -y -i vp9-seq.webm -f rawvideo -pix_fmt yuv4
 #   ffmpeg -f lavfi -i "$S" -c:v libvpx-vp9 -b:v 250k -pass 2 -passlogfile vp9pass \
 #          -auto-alt-ref 1 -lag-in-frames 25 -cpu-used 2 vp9-comp.webm
 ffmpeg -hide_banner -loglevel error -y -i vp9-comp.webm -f rawvideo -pix_fmt yuv420p vp9-comp.yuv
+
+# ---- Vorbis, which is the audio half of the ORIGINAL WebM -------------------------------------
+# A .webm from before about 2013 is VP8 and Vorbis, and until the Vorbis decoder landed this stack
+# opened such a file, played the picture, and named the audio as undecodable.  This fixture is that
+# pairing, so the case cannot regress silently.  The Vorbis decoder's own correctness is asserted in
+# reed (corpus/vorbis_*.ogg, ten fixtures against ffmpeg); this one is about the CONTAINER carrying
+# it — Matroska packs the three Vorbis headers into CodecPrivate with Xiph lacing, and Ogg puts them
+# at the head of their own logical stream, and the two paths share nothing.
+ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=15:duration=3" \
+       -f lavfi -i "sine=frequency=440:sample_rate=44100:duration=3" \
+       -c:v libvpx -b:v 200k -c:a libvorbis -q:a 4 vp8-vorbis.webm
+ffmpeg -y -v error -i vp8-vorbis.webm -vn vp8-vorbis.wav
+ffmpeg -y -v error -i theora-av.ogv -vn theora-av.wav

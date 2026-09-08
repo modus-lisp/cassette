@@ -234,6 +234,29 @@
                                                               (zerop (logand (aref (car pk) 0) #x80)))))
                      frames)
                (incf i))))
+          ;; Vorbis packets carry no duration of their own: how many samples a packet yields
+          ;; depends on ITS block size and the one before it, because the frame boundary is the
+          ;; window centre.  The block size is readable without decoding — it is the mode number,
+          ;; two bits into the packet — so timestamps can be laid down before anything decodes.
+          ((equal codec "A_VORBIS")
+           (handler-case
+               (let* ((headers (mapcar (lambda (h)
+                                         (coerce h '(simple-array (unsigned-byte 8) (*))))
+                                       (os-headers st)))
+                      (setup (reed:vorbis-setup-from-headers headers))
+                      (rate (float (or (track-sample-rate tr) 44100) 1d0))
+                      (prev 0) (pos 0))
+                 (dolist (pk (os-packets st))
+                   (let ((n (reed:vorbis-packet-block-size
+                             setup (coerce (car pk) '(simple-array (unsigned-byte 8) (*))))))
+                     (push (cons (/ pos rate)
+                                 (make-block-frame :track tr
+                                                   :timecode (round (* 1000000 pos) rate)
+                                                   :data (car pk) :keyframe-p t))
+                           frames)
+                     (when (and (plusp prev) (plusp n)) (incf pos (ash (+ prev n) -2)))
+                     (setf prev n))))
+             (error () nil)))
           ((equal codec "A_OPUS")
            (let ((pos 0))
              (dolist (pk (os-packets st))

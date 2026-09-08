@@ -99,10 +99,15 @@
     (let* ((p (cassette:open-media "vectors/theora-av.ogv"))
            (oracle (slurp "vectors/theora-av.yuv"))
            (n 0) (exact 0) (fb nil))
-      (ok "the Theora track is decodable and the Vorbis track is named, not guessed at"
+      ;; This assertion used to be that the Vorbis track was NAMED and not decoded, and it
+      ;; failed the day the Vorbis decoder landed — which is the assertion doing its job.  An
+      ;; `.ogv' is now a file where both tracks play.
+      (ok "both tracks of the .ogv are decodable, video and audio"
           (and (cassette:player-video-track p)
                (equal (cassette:track-codec-id (cassette:player-video-track p)) "V_THEORA")
-               (member "A_VORBIS" (cassette:player-unsupported p) :test #'equal)))
+               (cassette:player-audio-track p)
+               (equal (cassette:track-codec-id (cassette:player-audio-track p)) "A_VORBIS")
+               (null (cassette:player-unsupported p))))
       (loop for pic = (cassette:next-video-frame p) while pic
             do (let ((y (cassette:picture->yuv420 pic)))
                  (unless fb (setf fb (length y)))
