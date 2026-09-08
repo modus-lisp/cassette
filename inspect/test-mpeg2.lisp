@@ -118,7 +118,8 @@
                 ("mp4v-b"    . "B pictures, including direct mode")
                 ("mp4v-mq"   . "the MPEG-style quantiser instead of H.263\'s")
                 ("mp4v-full" . "all of it at once, at a fine quantiser")
-                ("mp4v-big"  . "352x288 at a constant bit rate")))
+                ("mp4v-big"  . "352x288 at a constant bit rate")
+                ("mp4v-asp"  . "Advanced Simple: quarter-sample motion, four vectors and B pictures")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let ((pics (mapcar #'reel.mpeg4:picture->yuv420

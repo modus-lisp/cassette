@@ -208,7 +208,8 @@ done
 #   ...mp4v-4mv adds -flags +mv4, mp4v-b uses -bf 2, mp4v-mq adds -mpeg_quant 1,
 #      mp4v-full is duration 1 with -qscale:v 3 -g 12 -bf 2 -flags +mv4 -mpeg_quant 1,
 #      mp4v-big is 352x288 duration 0.6 with -b:v 600k -g 12 -bf 2 -flags +mv4
-for f in mp4v-i mp4v-4mv mp4v-b mp4v-mq mp4v-full mp4v-big; do
+#      mp4v-asp is Advanced Simple: duration 0.6 with -qscale:v 3 -g 8 -bf 2 -flags +qpel+mv4
+for f in mp4v-i mp4v-4mv mp4v-b mp4v-mq mp4v-full mp4v-big mp4v-asp; do
   ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f.m4v" -vsync 0 \
          -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done
