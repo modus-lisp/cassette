@@ -294,3 +294,6 @@ done
 #   ffmpeg -f lavfi -i "$S" -c:v libvpx-vp9 -b:v 300k -cpu-used 4 vp9-cif.webm
 #   ffmpeg -f lavfi -i "testsrc2=size=1280x720:rate=25:duration=0.4" \
 #          -c:v libvpx-vp9 -b:v 1500k -tile-columns 2 -cpu-used 4 vp9-720.webm
+#   ffmpeg -f lavfi -i "testsrc2=size=352x288:rate=25:duration=1.6" \
+#          -c:v libvpx-vp9 -crf 20 -b:v 0 -cpu-used 0 -auto-alt-ref 1 -lag-in-frames 16 \
+#          vp9-switch.webm   # slow enough to reach TX_SWITCHABLE, which sends transform probs

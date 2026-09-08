@@ -71,6 +71,65 @@
 (format t "~&== VP9 frame headers~%")
 (check "vp9-cif" 176 144)
 (check "vp9-720" 1280 720 :tiles 4)
+(check "vp9-switch" 352 288)
+
+;;; ---- the compressed header ----------------------------------------------------------------------
+;;;
+;;; There is one very strong check available here without a picture to compare against: the
+;;; compressed header is an arithmetic-coded partition of a length the uncompressed header states, and
+;;; a correct parse consumes it EXACTLY.  Any field read at the wrong width, in the wrong order, or
+;;; under the wrong condition leaves the coder somewhere else — and across thirty headers ranging
+;;; from six bytes to nearly three hundred, landing on the last byte every time is not a coincidence.
+;;;
+;;; (The coder may sit one byte past the end: it reads ahead by one and always has.)
+
+(defun check-compressed (name &key (want-tx nil))
+  (handler-case
+      (let* ((m (cassette:parse-webm (slurp (format nil "vectors/~a.webm" name))))
+             (vt (cassette:webm-video-track m))
+             (r (cassette:make-block-reader m))
+             (refs (make-array 8 :initial-element nil))
+             (ctxs (let ((v (make-array 4)))
+                     (dotimes (i 4 v) (setf (aref v i) (reel.vp9::make-default-context)))))
+             (n 0) (worst 0) (txs '()))
+        (loop for f = (cassette:read-next-frame r) while f
+              do (when (eq (cassette:frame-track f) vt)
+                   (let ((data (coerce (cassette:frame-data f)
+                                       '(simple-array (unsigned-byte 8) (*)))))
+                     (dolist (part (reel.vp9:split-superframe data))
+                       (let ((h (reel.vp9:parse-header data (car part) (cdr part)
+                                                       :ref-sizes refs)))
+                         (unless (reel.vp9:h-show-existing h)
+                           (when (reel.vp9:h-keyframe h)
+                             (dotimes (i 4)
+                               (setf (aref ctxs i) (reel.vp9::make-default-context))))
+                           (multiple-value-bind (fp c)
+                               (reel.vp9::read-compressed-header
+                                data (+ (car part) (reel.vp9::h-header-bytes h))
+                                (reel.vp9:h-compressed-size h) h
+                                (aref ctxs (reel.vp9::h-frame-context h)))
+                             (pushnew (reel.vp9::fp-tx-mode fp) txs)
+                             (setf worst (max worst (abs (- (reel.vp9::bd-end c)
+                                                            (reel.vp9::bd-pos c)))))))
+                         (dotimes (i 8)
+                           (when (logbitp i (reel.vp9:h-refresh-mask h))
+                             (setf (aref refs i) (cons (reel.vp9:h-width h)
+                                                       (reel.vp9:h-height h)))))
+                         (incf n))))))
+        (ok (format nil "~a: ~d compressed headers, each consuming its partition exactly" name n)
+            (and (plusp n) (<= worst 1)))
+        (when want-tx
+          (ok (format nil "~a: the transform mode is ~d, which exercises its probability updates"
+                      name want-tx)
+              (member want-tx txs))))
+    (error (e) (ok (format nil "~a compressed header: ~a" name e) nil))))
+
+(format t "~&== VP9 compressed headers~%")
+(check-compressed "vp9-cif" :want-tx 3)
+(check-compressed "vp9-720")
+;; a slower encode reaches TX_SWITCHABLE, which is the only setting that sends transform-size
+;; probabilities at all
+(check-compressed "vp9-switch" :want-tx 4)
 
 ;;; ---- superframes -------------------------------------------------------------------------------
 ;;;
