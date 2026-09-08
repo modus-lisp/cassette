@@ -220,8 +220,14 @@
                                  (unless (= (aref y k) (aref want (+ off k))) (incf bad)))
                                (when (zerop bad) (incf exact)))
                              (incf n))))))))
-        (ok (format nil "~a: ~d pictures, ~d bit-exact against ffmpeg" name n exact)
-            (and (plusp n) (= n exact))))
+        (ok (format nil "~a: ~d pictures, ~d bit-exact against ffmpeg~@[ (~d compound blocks)~]"
+                    name n exact (and (plusp (reel.vp9:d-comp-blocks d))
+                                      (reel.vp9:d-comp-blocks d)))
+            (and (plusp n) (= n exact)
+                 ;; the compound fixture exists to reach a path nothing else does, so it has to
+                 ;; PROVE it did: a stream re-encoded with different settings would silently stop
+                 ;; covering it otherwise, which is how the path went unproven for as long as it did
+                 (or (not (equal name "vp9-comp")) (plusp (reel.vp9:d-comp-blocks d))))))
     (error (e) (ok (format nil "~a: ~a" name e) nil))))
 
 (check-sequence "vp9-cif")
@@ -234,6 +240,10 @@
 ;; else exercises the backward adaptation, and a decoder without it is right on the first frame and
 ;; drifts from there.
 (check-sequence "vp9-seq")
+;; TWO REFERENCES AT ONCE, which needs an alt-ref pointing forward in time — and that needs a
+;; TWO-PASS encode, because libvpx ignores -auto-alt-ref in one pass and says so only in the option's
+;; help text.  Fifty-three of this clip's sixty-five inter frames choose compound prediction.
+(check-sequence "vp9-comp")
 
 (format t "~&== superframes~%")
 (handler-case

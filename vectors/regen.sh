@@ -314,3 +314,15 @@ done
 #          # frame-parallel OFF, so the probability context is refreshed by backward adaptation
 #          # from each frame's symbol counts — nothing else exercises that path
 ffmpeg -hide_banner -loglevel error -y -i vp9-seq.webm -f rawvideo -pix_fmt yuv420p vp9-seq.yuv
+#
+# COMPOUND PREDICTION NEEDS A TWO-PASS ENCODE.  A block predicting from two references at once
+# requires two references whose sign biases differ — one back in time and one forward — which
+# requires an alt-ref, which requires -auto-alt-ref, which libvpx accepts and silently ignores
+# unless the encode is two-pass.  The only place that is written down is the option's help text.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=2.4"
+#   ffmpeg -f lavfi -i "$S" -c:v libvpx-vp9 -b:v 250k -pass 1 -passlogfile vp9pass \
+#          -auto-alt-ref 1 -lag-in-frames 25 -cpu-used 2 -f null /dev/null
+#   ffmpeg -f lavfi -i "$S" -c:v libvpx-vp9 -b:v 250k -pass 2 -passlogfile vp9pass \
+#          -auto-alt-ref 1 -lag-in-frames 25 -cpu-used 2 vp9-comp.webm
+ffmpeg -hide_banner -loglevel error -y -i vp9-comp.webm -f rawvideo -pix_fmt yuv420p vp9-comp.yuv
