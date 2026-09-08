@@ -196,3 +196,21 @@ for f in h264 m2; do
   ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f.avi" -vsync 0 \
          -f rawvideo -pix_fmt yuv420p "$f-avi.yuv"
 done
+
+# ---- MPEG-4 Part 2 --------------------------------------------------------------------------------
+#
+# The codec behind DivX and XviD.  The fixtures are spread across the pieces that are separate code:
+# one motion vector and four, the H.263 quantiser and the MPEG one, B pictures with direct mode, and
+# a size where the encoder cuts each picture into more video packets.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.4"
+#   ffmpeg -f lavfi -i "$S" -c:v mpeg4 -vtag XVID -qscale:v 4 -g 5 -bf 0 -pix_fmt yuv420p mp4v-i.m4v
+#   ...mp4v-4mv adds -flags +mv4, mp4v-b uses -bf 2, mp4v-mq adds -mpeg_quant 1,
+#      mp4v-full is duration 1 with -qscale:v 3 -g 12 -bf 2 -flags +mv4 -mpeg_quant 1,
+#      mp4v-big is 352x288 duration 0.6 with -b:v 600k -g 12 -bf 2 -flags +mv4
+for f in mp4v-i mp4v-4mv mp4v-b mp4v-mq mp4v-full mp4v-big; do
+  ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f.m4v" -vsync 0 \
+         -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
+ffmpeg -hide_banner -loglevel error -y -idct simple -i asp.avi -vsync 0 \
+       -f rawvideo -pix_fmt yuv420p asp-avi.yuv

@@ -27,6 +27,7 @@
   opus                                          ; reed opus decoder state or NIL
   aac                                           ; reed AAC decoder state or NIL
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
+  mpeg4                                         ; reel.mpeg4 decoder state or NIL
   ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
   (mpeg2-ready '())
   (mpeg2-stamps '())
@@ -45,7 +46,8 @@
   (eof nil))
 
 (defun %decodable-video-p (codec)
-  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2") :test #'equal))
+  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP")
+          :test #'equal))
 (defun %decodable-audio-p (codec)
   ;; AAC arrives from MP4 as `mp4a' and from Matroska as `A_AAC', and the access units inside are
   ;; identical: one raw_data_block each, configured by an AudioSpecificConfig the container carries
@@ -110,6 +112,8 @@
        :h264 h264
        :mpeg2 (and vt (member (track-codec-id vt) '("V_MPEG1" "V_MPEG2") :test #'equal)
                    (reel.mpeg2:make-decoder))
+       :mpeg4 (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/ASP")
+                   (reel.mpeg4:make-decoder))
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
@@ -289,6 +293,20 @@
                   (setf (picture-timestamp out) (pop (player-h264-stamps p)))
                   out)))
 
+(defun %mpeg-feed (p bytes)
+  "Give one access unit to whichever MPEG video decoder this player holds."
+  (if (player-mpeg4 p)
+      (reel.mpeg4:feed-bytes (player-mpeg4 p) (coerce bytes '(simple-array (unsigned-byte 8) (*))))
+      (reel.mpeg2:feed-bytes (player-mpeg2 p) bytes)))
+
+(defun %mpeg-flush (p)
+  (if (player-mpeg4 p)
+      (reel.mpeg4:flush-decoder (player-mpeg4 p))
+      (reel.mpeg2:flush-decoder (player-mpeg2 p))))
+
+(defun %mpeg-as-picture (p f)
+  (if (player-mpeg4 p) (reel.mpeg4:as-picture f) (reel.mpeg2:as-picture f)))
+
 (defun %mpeg2-claim (p pics)
   "Attach presentation times to pictures that have come out in display order.
 
@@ -296,7 +314,7 @@
    unclaimed.  Sorted, the pending times ARE display order — which is the whole reason this works
    without the decoder having to report anything about ordering."
   (loop for pic in pics
-        collect (let ((out (reel.mpeg2:as-picture pic)))
+        collect (let ((out (%mpeg-as-picture p pic)))
                   (when (player-mpeg2-stamps p)
                     (setf (picture-timestamp out) (pop (player-mpeg2-stamps p))))
                   out)))
@@ -306,7 +324,7 @@
   (let ((f (%next-frame-for p vt)))
     (cond
       ((null f)
-       (let ((tail (ignore-errors (reel.mpeg2:flush-decoder (player-mpeg2 p)))))
+       (let ((tail (ignore-errors (%mpeg-flush p))))
          (when tail
            (setf (player-mpeg2-ready p) (%mpeg2-claim p tail))
            (return-from %mpeg2-fill t))
@@ -318,7 +336,7 @@
              (return-from %mpeg2-fill t)))
        (setf (player-mpeg2-stamps p)
              (merge 'list (player-mpeg2-stamps p) (list (frame-timestamp f scale)) #'<))
-       (let ((pics (reel.mpeg2:feed-bytes (player-mpeg2 p) (frame-data f))))
+       (let ((pics (%mpeg-feed p (frame-data f))))
          (setf (player-mpeg2-ready p) (%mpeg2-claim p pics)))
        t))))
 
@@ -341,7 +359,7 @@
     ;; plainly: ONE ACCESS UNIT IS NOT ONE PICTURE OUT.  A decoder holds each reference picture back
     ;; until the next one arrives, so feeding a P picture yields the I picture before it, and the
     ;; presentation time on the sample just fed belongs to a picture that has not come out yet.
-    (when (player-mpeg2 p)
+    (when (or (player-mpeg2 p) (player-mpeg4 p))
       (loop
         (when (player-mpeg2-ready p)
           (return-from next-video-frame (pop (player-mpeg2-ready p))))

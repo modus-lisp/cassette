@@ -83,7 +83,8 @@
 ;; The oracle files are named `h264-avi.yuv' rather than `h264.yuv' because the fixture is
 ;; `h264.avi' and there is already an `h264' elsewhere in this directory.
 (dolist (spec '(("h264.avi" "h264-avi" . "H.264 in an AVI")
-                ("m2.avi"   "m2-avi"   . "MPEG-2 in an AVI")))
+                ("m2.avi"   "m2-avi"   . "MPEG-2 in an AVI")
+                ("asp.avi"  "asp-avi"  . "MPEG-4 Part 2 in an AVI, which is what DivX and XviD are")))
   (destructuring-bind (file base . what) spec
     (handler-case
         (let* ((p (cassette:open-media (format nil "vectors/~a" file) :audio nil))
@@ -111,12 +112,20 @@
                  (= 40000 (cassette:frame-timecode (second video)))))))
   (error (e) (ok (format nil "AVI inventory: ~a" e) nil)))
 
-(handler-case
-    (let ((p (cassette:open-media "vectors/asp.avi" :audio nil)))
-      (ok "a codec this cannot decode is named rather than guessed at"
-          (and (null (cassette:player-video-track p))
-               (member "V_MPEG4/ISO/ASP" (cassette:player-unsupported p) :test #'equal))))
-  (error (e) (ok (format nil "AVI refusal: ~a" e) nil)))
+(format t "~&== MPEG-4 Part 2 elementary streams, every frame, against ffmpeg -idct simple~%")
+(dolist (spec '(("mp4v-i"    . "one motion vector per macroblock")
+                ("mp4v-4mv"  . "four motion vectors per macroblock")
+                ("mp4v-b"    . "B pictures, including direct mode")
+                ("mp4v-mq"   . "the MPEG-style quantiser instead of H.263\'s")
+                ("mp4v-full" . "all of it at once, at a fine quantiser")
+                ("mp4v-big"  . "352x288 at a constant bit rate")))
+  (destructuring-bind (name . what) spec
+    (handler-case
+        (let ((pics (mapcar #'reel.mpeg4:picture->yuv420
+                            (reel.mpeg4:decode-elementary-stream
+                             (slurp (format nil "vectors/~a.m4v" name))))))
+          (compare name pics (slurp (format nil "vectors/~a.yuv" name)) what))
+      (error (e) (ok (format nil "~a: ~a" name e) nil)))))
 
 (format t "~&== what the containers say is in them~%")
 (handler-case
