@@ -188,49 +188,70 @@
 (check-tiles "vp9-720")      ; four tile columns, so the tile length fields are exercised too
 (check-tiles "vp9-switch")
 
-(format t "~&== VP9 reconstruction, where a picture can finally be compared~%")
+(format t "~&== VP9 reconstruction: a decoded picture, compared~%")
 
-;;; A LOSSLESS ENCODE IS THE ONE CASE THAT CAN BE COMPARED BEFORE THE LOOP FILTER EXISTS, because a
-;;; lossless frame has a filter level of zero and so ffmpeg's own output is unfiltered too.  It also
-;;; happens to exercise the path nothing else does: a lossless block uses the Walsh-Hadamard, which
-;;; is exact where the DCT is not, and scans as if 4x4 whatever its size says.
+;;; Every INTRA frame of every fixture, against ffmpeg, sample for sample.  That covers the whole
+;;; decoder except inter prediction: the partition walk, every block mode, every coefficient, all
+;;; four transform sizes with both the DCT and the ADST, the fifteen intra predictors with their
+;;; substitutions for missing neighbours, the loop filter with all three of its widths, and the crop.
 ;;;
-;;; What this proves is everything below the filter: the partition walk, every block mode, every
-;;; coefficient, the edge-sample gathering with all its substitutions, the fifteen intra predictors,
-;;; and the crop on the way out.
+;;; The lossless fixture is here for two reasons of its own: it is the only one that exercises the
+;;; Walsh-Hadamard, and — because a lossless frame's filter level is zero — it was the only one that
+;;; could be compared at all until the loop filter existed.
 
-(handler-case
-    (let* ((m (cassette:parse-webm (slurp "vectors/vp9-lossless.webm")))
-           (vt (cassette:webm-video-track m))
-           (r (cassette:make-block-reader m))
-           (ctxs (let ((v (make-array 4)))
-                   (dotimes (i 4 v) (setf (aref v i) (reel.vp9:make-default-context)))))
-           (want (slurp "vectors/vp9-lossless.yuv"))
-           (done nil))
-      (loop for f = (cassette:read-next-frame r) while (and f (not done))
-            do (when (eq (cassette:frame-track f) vt)
-                 (let ((data (coerce (cassette:frame-data f)
-                                     '(simple-array (unsigned-byte 8) (*)))))
-                   (dolist (part (reel.vp9:split-superframe data))
-                     (let ((h (reel.vp9:parse-header data (car part) (cdr part))))
-                       (when (and (not (reel.vp9:h-show-existing h)) (reel.vp9:h-keyframe h) (not done))
-                         (let* ((hb (+ (car part) (reel.vp9:h-header-bytes h)))
-                                (fp (reel.vp9:read-compressed-header
-                                     data hb (reel.vp9:h-compressed-size h) h
-                                     (aref ctxs (reel.vp9:h-frame-context h))))
-                                (st (reel.vp9:make-state h fp)))
-                           (reel.vp9:decode-tiles
-                            data (+ hb (reel.vp9:h-compressed-size h)) (cdr part) st)
-                           (let ((y (reel.vp9:picture->yuv420 (reel.vp9:st-frame st)))
-                                 (bad 0))
-                             (dotimes (k (length y))
-                               (unless (= (aref y k) (aref want k)) (incf bad)))
-                             (ok (format nil "a lossless key frame is bit-exact (~d samples)"
-                                         (length y))
-                                 (zerop bad)))
-                           (setf done t))))))))
-      (unless done (ok "a lossless key frame was found to decode" nil)))
-  (error (e) (ok (format nil "lossless reconstruction: ~a" e) nil)))
+(defun check-picture (name)
+  (handler-case
+      (let* ((m (cassette:parse-webm (slurp (format nil "vectors/~a.webm" name))))
+             (vt (cassette:webm-video-track m))
+             (r (cassette:make-block-reader m))
+             (ctxs (let ((v (make-array 4)))
+                     (dotimes (i 4 v) (setf (aref v i) (reel.vp9:make-default-context)))))
+             (want (slurp (format nil "vectors/~a.yuv" name)))
+             (refs (make-array 8 :initial-element nil))
+             (n 0) (exact 0) (frame 0))
+        (loop for f = (cassette:read-next-frame r) while f
+              do (when (eq (cassette:frame-track f) vt)
+                   (let ((data (coerce (cassette:frame-data f)
+                                       '(simple-array (unsigned-byte 8) (*)))))
+                     (dolist (part (reel.vp9:split-superframe data))
+                       (let ((h (reel.vp9:parse-header data (car part) (cdr part)
+                                                       :ref-sizes refs)))
+                         (dotimes (i 8)
+                           (when (and (not (reel.vp9:h-show-existing h))
+                                      (logbitp i (reel.vp9:h-refresh-mask h)))
+                             (setf (aref refs i) (cons (reel.vp9:h-width h)
+                                                       (reel.vp9:h-height h)))))
+                         (cond
+                           ((reel.vp9:h-show-existing h))
+                           ((or (reel.vp9:h-keyframe h) (reel.vp9:h-intra-only h))
+                            (when (reel.vp9:h-keyframe h)
+                              (dotimes (i 4)
+                                (setf (aref ctxs i) (reel.vp9:make-default-context))))
+                            (let* ((hb (+ (car part) (reel.vp9:h-header-bytes h)))
+                                   (fp (reel.vp9:read-compressed-header
+                                        data hb (reel.vp9:h-compressed-size h) h
+                                        (aref ctxs (reel.vp9:h-frame-context h))))
+                                   (st (reel.vp9:make-state h fp)))
+                              (reel.vp9:decode-tiles
+                               data (+ hb (reel.vp9:h-compressed-size h)) (cdr part) st)
+                              (let* ((y (reel.vp9:picture->yuv420 (reel.vp9:st-frame st)))
+                                     (off (* frame (length y)))
+                                     (bad 0))
+                                (when (<= (+ off (length y)) (length want))
+                                  (dotimes (k (length y))
+                                    (unless (= (aref y k) (aref want (+ off k))) (incf bad)))
+                                  (when (zerop bad) (incf exact)))
+                                (incf n)))
+                            (incf frame))
+                           (t (incf frame))))))))
+        (ok (format nil "~a: ~d intra frame~:p, ~d bit-exact against ffmpeg" name n exact)
+            (and (plusp n) (= n exact))))
+    (error (e) (ok (format nil "~a picture: ~a" name e) nil))))
+
+(check-picture "vp9-cif")
+(check-picture "vp9-720")        ; 1280x720 across four tile columns
+(check-picture "vp9-switch")     ; the transform mode is switchable here
+(check-picture "vp9-lossless")   ; the Walsh-Hadamard, and a filter level of zero
 
 (format t "~&== superframes~%")
 (handler-case
