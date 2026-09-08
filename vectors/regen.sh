@@ -117,6 +117,11 @@ done
 #   ffmpeg -i BBB.webm -t 8 -s 640x360 -pix_fmt yuv420p -c:v libx264 -profile:v baseline -g 1 \
 #          -qp 24 -an bbb-h264.mp4
 
+# fast.mp4 now decodes rather than being refused, so it needs a reference decode like the rest.
+# It is worth more than its size suggests: x264's defaults, which means a B PYRAMID, and it was the
+# only fixture that exercised adaptive reference marking.
+ffmpeg -hide_banner -loglevel error -y -i fast.mp4 -f rawvideo -pix_fmt yuv420p fast.yuv
+
 # High profile.  hp-plain uses neither the 8x8 transform nor scaling lists, so it decodes with no
 # High-specific code at all — it is the fixture that proves the refusal tests the FLAG and not the
 # profile.  hp-cqm carries the default scaling matrices.  hp-8x8 and hp-8x8c need the 8x8 transform
@@ -125,6 +130,17 @@ done
 #   ffmpeg -i BBB.webm -t 1 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v high \
 #          -x264-params "$H:8x8dct=0:cqm=flat:cabac=1" -qp 24 -bsf:v h264_mp4toannexb -f h264 hp-plain.h264
 #   ...hp-cqm with 8x8dct=0:cqm=jvt, hp-8x8 with 8x8dct=1:cqm=flat, hp-8x8c the same with cabac=0
-for f in hp-plain hp-cqm hp-8x8 hp-8x8c; do
+#
+# hp-real is the one that matters most and has the fewest options set: x264 with NO parameters at
+# all beyond the quantiser, which is what almost every High profile file in the world is.  B
+# pyramid, weighted prediction, three references, the 8x8 transform and CABAC, all at once.
+#   ffmpeg -i bbb360.webm -t 2 -s 176x144 -pix_fmt yuv420p -c:v libx264 -profile:v high \
+#          -preset medium -qp 24 -bsf:v h264_mp4toannexb -f h264 hp-real.h264
+# hi422.mp4 is 4:2:2 chroma, which is refused: every sample index in the decoder assumes chroma is
+# half the luma in BOTH directions, so this is a shape to change and not a flag to add.  It is the
+# fixture that keeps the refusal path honest now that High profile itself decodes.
+#   ffmpeg -i bbb360.webm -t 1 -s 176x144 -pix_fmt yuv422p -c:v libx264 -profile:v high422 \
+#          -qp 24 -f mp4 hi422.mp4
+for f in hp-plain hp-cqm hp-8x8 hp-8x8c hp-real; do
   ffmpeg -hide_banner -loglevel error -y -i "$f.h264" -f rawvideo -pix_fmt yuv420p "$f.yuv"
 done

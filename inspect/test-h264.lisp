@@ -137,7 +137,10 @@
                 ("b-hard" . "everything at once: weighting, three refs, all partitions")
                 ("k-nopart" . "a coded direct macroblock beside one coding a reference index")
                 ("hp-plain" . "High profile using neither the 8x8 transform nor scaling lists")
-                ("hp-cqm" . "High profile with the default scaling matrices")))
+                ("hp-cqm" . "High profile with the default scaling matrices")
+                ("hp-8x8c" . "High profile 8x8 transform, CAVLC")
+                ("hp-8x8" . "High profile 8x8 transform, CABAC")
+                ("hp-real" . "x264's own defaults: 8x8, B pyramid, weighting, three references")))
   (destructuring-bind (name . what) spec
     (handler-case
         (let* ((pics (reel.h264:decode-annex-b (slurp (format nil "vectors/~a.h264" name))
@@ -219,24 +222,42 @@
           (not (reel.h264:access-units-independent-p aus))))
   (error (e) (ok (format nil "inter-coded independence check: ~a" e) nil)))
 
+(format t "~&== High profile through a container, end to end~%")
+;; fast.mp4 is High profile with the 8x8 transform, and it used to be here as the file that was
+;; turned away.  It decodes now, so it earns a stronger test than the refusal was: every frame,
+;; through the MP4 demuxer rather than as a raw Annex B stream.
+(handler-case
+    (let* ((oracle (slurp "vectors/fast.yuv"))
+           (p (cassette:open-media "vectors/fast.mp4"))
+           (n 0) (exact 0) (fb nil))
+      (loop for pic = (cassette:next-video-frame p) while pic
+            do (let ((y (cassette:picture->yuv420 pic)))
+                 (unless fb (setf fb (length y)))
+                 (let ((off (* n fb)) (bad 0))
+                   (when (<= (+ off fb) (length oracle))
+                     (dotimes (k fb)
+                       (unless (= (aref y k) (aref oracle (+ off k))) (incf bad)))
+                     (when (zerop bad) (incf exact))))
+                 (incf n)))
+      (ok (format nil "fast.mp4: High profile, 8x8 transform, ~d frames through the container, ~d bit-exact" n exact)
+          (and (plusp n) (= exact n))))
+  (error (e) (ok (format nil "fast.mp4: ~a" e) nil)))
+
 (format t "~&== what is refused is refused, not decoded wrong~%")
-;; fast.mp4 is High profile with the 8x8 transform.  That flag is the whole reason it is turned
-;; away: with it set, every macroblock carrying luma residual also carries a transform_size_8x8_flag,
-;; and a decoder that does not read that bit does not lose the transform, it loses the bitstream —
-;; one bit per macroblock, confident garbage from the first picture.  It used to be refused for
-;; having B slices, which it also has, but those decode now.
+;; 4:2:2 chroma.  Every sample the decoder reads assumes the chroma planes are half the luma in
+;; BOTH directions, so this is not a flag to add but a shape to change, and it is turned away.
 ;;
 ;; What is asserted is the SHAPE of the refusal, not its wording: the track is named as
 ;; undecodable, no picture is produced, and the file still opens so the rest of it can play.
 (handler-case
-    (let ((p (cassette:open-media "vectors/fast.mp4")))
-      (ok "a High profile stream is named as undecodable rather than decoded"
+    (let ((p (cassette:open-media "vectors/hi422.mp4")))
+      (ok "a 4:2:2 stream is named as undecodable rather than decoded"
           (and (null (cassette:player-video-track p))
                (member "V_MPEG4/ISO/AVC" (cassette:player-unsupported p) :test #'equal)
                (null (cassette:next-video-frame p))))
       (ok "and it says why" (let ((n (cassette:player-video-note p)))
-                              (and n (search "8x8" n)))))
-  (error (e) (ok (format nil "High profile refusal: ~a" e) nil)))
+                              (and n (search "4:2:0" n)))))
+  (error (e) (ok (format nil "4:2:2 refusal: ~a" e) nil)))
 
 (format t "~&~a~%" (if (zerop *fails*) "H264 OK" (format nil "H264: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))
