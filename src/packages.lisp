@@ -36,6 +36,9 @@
    #:parse-mpegsys #:mpegsys #:ms-tracks #:ms-duration #:ms-kind
    #:mpegsys-video-track #:mpegsys-audio-track #:mpegts-p #:mpegps-p
    #:make-mpegsys-reader #:read-next-mpegsys-frame #:mpegsys-tick
+   ;; AVI
+   #:parse-avi #:avi #:avi-p #:avi-tracks #:avi-duration #:avi-width #:avi-height
+   #:avi-video-track #:avi-audio-track #:avi-frames #:make-avi-reader #:read-next-avi-frame
    ;; muxer
    #:make-muxer #:add-video-track #:add-audio-track #:add-frame #:finish-webm
    #:write-webm-file #:muxer

@@ -181,3 +181,18 @@ for f in m2-ps.mpg m2-ts.ts m1-ps.mpg h264-ts.ts; do
   ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f" -vsync 0 \
          -f rawvideo -pix_fmt yuv420p "${f%.*}.yuv"
 done
+
+# ---- AVI ------------------------------------------------------------------------------------------
+#
+# Three files for three purposes: two codecs that decode today, carried in a container that has never
+# heard of either, and one that does not — so that the refusal path stays honest.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.6"
+#   ffmpeg -f lavfi -i "$S" -c:v libx264 -preset fast -crf 26 -pix_fmt yuv420p h264.avi
+#   ffmpeg -f lavfi -i "$S" -c:v mpeg2video -qscale:v 4 -pix_fmt yuv420p m2.avi
+#   ffmpeg -f lavfi -i "$S" -f lavfi -i "sine=frequency=440:duration=0.6" \
+#          -c:v mpeg4 -vtag XVID -qscale:v 4 -c:a libmp3lame -b:a 64k -shortest -pix_fmt yuv420p asp.avi
+for f in h264 m2; do
+  ffmpeg -hide_banner -loglevel error -y -idct simple -i "$f.avi" -vsync 0 \
+         -f rawvideo -pix_fmt yuv420p "$f-avi.yuv"
+done

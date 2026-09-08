@@ -60,18 +60,22 @@
    named in PLAYER-UNSUPPORTED instead, so a file that is half playable plays half."
   (let* ((bytes (if (or (stringp source) (pathnamep source)) (slurp-file source) source))
          (mp4p (and (not (webm-p bytes)) (mp4-p bytes)))
-         (sysp (and (not mp4p) (not (webm-p bytes))
+         (avip (and (not mp4p) (not (webm-p bytes)) (avi-p bytes)))
+         (sysp (and (not mp4p) (not avip) (not (webm-p bytes))
                     (or (mpegts-p bytes) (mpegps-p bytes))))
          (sys-frames nil))
-    (unless (or mp4p sysp (webm-p bytes))
-      (%err "not a WebM, MP4, program stream or transport stream"))
+    (unless (or mp4p sysp avip (webm-p bytes))
+      (%err "not a WebM, MP4, AVI, program stream or transport stream"))
     (let* ((c (cond (mp4p (parse-mp4 bytes))
+                    (avip (parse-avi bytes))
                     (sysp (multiple-value-bind (m fr) (parse-mpegsys bytes)
                             (setf sys-frames fr) m))
                     (t (parse-webm bytes))))
-           (vt (cond (mp4p (mp4-video-track c)) (sysp (mpegsys-video-track c))
+           (vt (cond (mp4p (mp4-video-track c)) (avip (avi-video-track c))
+                     (sysp (mpegsys-video-track c))
                      (t (webm-video-track c))))
-           (at (and audio (cond (mp4p (mp4-audio-track c)) (sysp (mpegsys-audio-track c))
+           (at (and audio (cond (mp4p (mp4-audio-track c)) (avip (avi-audio-track c))
+                                (sysp (mpegsys-audio-track c))
                                 (t (webm-audio-track c)))))
            (unsupported '()) (note nil) (h264 nil))
       (when (and vt (not (%decodable-video-p (track-codec-id vt))))
@@ -91,13 +95,15 @@
         (push (track-codec-id at) unsupported)
         (setf at nil))
       (make-webm-player
-       :kind (cond (mp4p :mp4) (sysp :mpegsys) (t :webm))
+       :kind (cond (mp4p :mp4) (avip :avi) (sysp :mpegsys) (t :webm))
        :webm c
-       :tick (cond (mp4p +mp4-tick+) (sysp (mpegsys-tick c)) (t (webm-timecode-scale c)))
+       :tick (cond (mp4p +mp4-tick+) (avip +avi-tick+) (sysp (mpegsys-tick c))
+                   (t (webm-timecode-scale c)))
        :unsupported (nreverse unsupported)
        :video-note note
        :video-track vt :audio-track at
        :reader (cond (mp4p (make-mp4-reader c))
+                     (avip (make-avi-reader c))
                      (sysp (make-mpegsys-reader c sys-frames))
                      (t (make-block-reader c)))
        :vp8 (and vt (equal (track-codec-id vt) "V_VP8") (make-decoder))
@@ -138,6 +144,7 @@
   (case (player-kind p)
     (:mp4 (read-next-mp4-frame (player-reader p)))
     (:mpegsys (read-next-mpegsys-frame (player-reader p)))
+    (:avi (read-next-avi-frame (player-reader p)))
     (t (read-next-frame (player-reader p)))))
 
 (defun player-eof-p (p) (player-eof p))
@@ -217,7 +224,7 @@
    Annex B byte stream with start codes, exactly as a `.h264' file does.  Reading one as the other
    fails immediately and loudly — a length prefix read as a start code has the forbidden zero bit
    set — which is the one mercy in it."
-  (if (eq (player-kind p) :mpegsys)
+  (if (member (player-kind p) '(:mpegsys :avi))
       (reel.h264:annex-b-nals (frame-data f))
       (reel.h264:length-prefixed-nals (frame-data f) :length-size (player-nal-length p))))
 

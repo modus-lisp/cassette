@@ -79,6 +79,45 @@
           (compare file (nreverse pics) (slurp (format nil "vectors/~a.yuv" base)) what))
       (error (e) (ok (format nil "~a: ~a" file e) nil)))))
 
+(format t "~&== AVI, which names its codec with four characters and nothing else~%")
+;; The oracle files are named `h264-avi.yuv' rather than `h264.yuv' because the fixture is
+;; `h264.avi' and there is already an `h264' elsewhere in this directory.
+(dolist (spec '(("h264.avi" "h264-avi" . "H.264 in an AVI")
+                ("m2.avi"   "m2-avi"   . "MPEG-2 in an AVI")))
+  (destructuring-bind (file base . what) spec
+    (handler-case
+        (let* ((p (cassette:open-media (format nil "vectors/~a" file) :audio nil))
+               (pics '()))
+          (loop for pic = (cassette:next-video-frame p) while pic
+                do (push (cassette:picture->yuv420 pic) pics))
+          (compare file (nreverse pics) (slurp (format nil "vectors/~a.yuv" base)) what))
+      (error (e) (ok (format nil "~a: ~a" file e) nil)))))
+
+(handler-case
+    (let ((a (cassette:parse-avi (slurp "vectors/asp.avi"))))
+      ;; DIVX, DX50, XVID, FMP4 and MP4V are all ISO/IEC 14496-2 written by different encoders.
+      ;; AVI records which ENCODER wrote the file, not what it wrote, so the table has to.
+      (ok "XVID is recognised as MPEG-4 Part 2 rather than as a codec of its own"
+          (equal (cassette:track-codec-id (cassette:avi-video-track a)) "V_MPEG4/ISO/ASP"))
+      (ok "and the MP3 track beside it is named too"
+          (equal (cassette:track-codec-id (cassette:avi-audio-track a)) "A_MPEG/L3"))
+      ;; AVI carries no timestamps at all: a chunk's time is counted from the ones before it
+      (let* ((frames (cassette:avi-frames a))
+             (video (remove-if-not (lambda (f) (= 1 (cassette:track-type (cassette:frame-track f))))
+                                   frames)))
+        (ok "video times are counted, forty milliseconds apart at 25 frames a second"
+            (and (> (length video) 3)
+                 (= 0 (cassette:frame-timecode (first video)))
+                 (= 40000 (cassette:frame-timecode (second video)))))))
+  (error (e) (ok (format nil "AVI inventory: ~a" e) nil)))
+
+(handler-case
+    (let ((p (cassette:open-media "vectors/asp.avi" :audio nil)))
+      (ok "a codec this cannot decode is named rather than guessed at"
+          (and (null (cassette:player-video-track p))
+               (member "V_MPEG4/ISO/ASP" (cassette:player-unsupported p) :test #'equal))))
+  (error (e) (ok (format nil "AVI refusal: ~a" e) nil)))
+
 (format t "~&== what the containers say is in them~%")
 (handler-case
     (multiple-value-bind (m frames) (cassette:parse-mpegsys (slurp "vectors/h264-ts.ts"))
