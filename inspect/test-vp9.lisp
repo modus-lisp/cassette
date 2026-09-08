@@ -137,6 +137,57 @@
 ;;; fixtures happens to contain one — libvpx here does not emit alt-refs for these clips — so one is
 ;;; BUILT, from two real frames and a real index, which exercises the same code the same way.
 
+(format t "~&== VP9 tiles, the partition tree and coefficients (intra frames)~%")
+
+;;; The same invariant, one level down and much sharper.  Every tile is its own arithmetic-coded
+;;; partition of a length the frame states, so a correct walk of the partition quadtree — every block
+;;; mode, every transform size, every coefficient of every transform block — ends on the last byte of
+;;; it.  Getting one symbol wrong anywhere in a tile of thirty-four thousand bytes does not end there.
+
+(defun check-tiles (name)
+  (handler-case
+      (let* ((m (cassette:parse-webm (slurp (format nil "vectors/~a.webm" name))))
+             (vt (cassette:webm-video-track m))
+             (r (cassette:make-block-reader m))
+             (refs (make-array 8 :initial-element nil))
+             (ctxs (let ((v (make-array 4)))
+                     (dotimes (i 4 v) (setf (aref v i) (reel.vp9:make-default-context)))))
+             (intra 0) (blocks 0) (slack 0))
+        (loop for f = (cassette:read-next-frame r) while f
+              do (when (eq (cassette:frame-track f) vt)
+                   (let ((data (coerce (cassette:frame-data f)
+                                       '(simple-array (unsigned-byte 8) (*)))))
+                     (dolist (part (reel.vp9:split-superframe data))
+                       (let ((h (reel.vp9:parse-header data (car part) (cdr part)
+                                                       :ref-sizes refs)))
+                         (unless (reel.vp9:h-show-existing h)
+                           (when (reel.vp9:h-keyframe h)
+                             (dotimes (i 4)
+                               (setf (aref ctxs i) (reel.vp9:make-default-context))))
+                           (when (or (reel.vp9:h-keyframe h) (reel.vp9:h-intra-only h))
+                             (let* ((hb (+ (car part) (reel.vp9:h-header-bytes h)))
+                                    (fp (reel.vp9:read-compressed-header
+                                         data hb (reel.vp9:h-compressed-size h) h
+                                         (aref ctxs (reel.vp9:h-frame-context h))))
+                                    (st (reel.vp9:make-state h fp)))
+                               (reel.vp9:decode-tiles
+                                data (+ hb (reel.vp9:h-compressed-size h)) (cdr part) st)
+                               (incf intra)
+                               (incf blocks (reel.vp9:st-blocks st))
+                               (setf slack (max slack (reel.vp9:st-tile-slack st))))))
+                         (dotimes (i 8)
+                           (when (logbitp i (reel.vp9:h-refresh-mask h))
+                             (setf (aref refs i) (cons (reel.vp9:h-width h)
+                                                       (reel.vp9:h-height h))))))))))
+        (ok (format nil "~a: ~d intra frame~:p, ~d blocks, every tile consumed exactly"
+                    name intra blocks)
+            (and (plusp intra) (plusp blocks) (<= slack 1))))
+    (error (e) (ok (format nil "~a tiles: ~a" name e) nil))))
+
+(check-tiles "vp9-cif")
+(check-tiles "vp9-720")      ; four tile columns, so the tile length fields are exercised too
+(check-tiles "vp9-switch")
+
 (format t "~&== superframes~%")
 (handler-case
     (let* ((m (cassette:parse-webm (slurp "vectors/vp9-cif.webm")))
