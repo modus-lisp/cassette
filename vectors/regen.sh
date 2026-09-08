@@ -252,3 +252,20 @@ ffmpeg -hide_banner -loglevel error -y -i ffv1-rgb.mkv -f rawvideo -pix_fmt gbrp
 #          -shortest theora-av.ogv
 #   ffmpeg -f lavfi -i "$S" -c:v libtheora -q:v 7 -an theora.ogv
 #   ffmpeg -f lavfi -i "sine=frequency=440:duration=1" -c:a libopus opus-ogg.ogg
+
+# ---- Theora ---------------------------------------------------------------------------------------
+#
+# The quantiser is what varies most usefully: how many of a picture's three quantiser indices get
+# used, and therefore whether the per-block index runs are exercised at all, follows from it.  The
+# 100x70 file is here because a picture that is not a whole number of macroblocks is coded LARGER
+# than it is shown, and getting the displayed window's origin wrong is invisible at any round size.
+#
+#   S="testsrc2=size=176x144:rate=25:duration=0.6"
+#   ffmpeg -f lavfi -i "$S" -c:v libtheora -q:v 2 -an theora-q2.ogv
+#   ffmpeg -f lavfi -i "$S" -c:v libtheora -q:v 9 -an theora-q9.ogv
+#   ffmpeg -f lavfi -i "testsrc2=size=100x70:rate=25:duration=0.6"   -c:v libtheora -q:v 6 -an theora-odd.ogv
+#   ffmpeg -f lavfi -i "testsrc2=size=320x240:rate=25:duration=1.2"  -c:v libtheora -q:v 5 -g 12 -an theora-320.ogv
+#   ffmpeg -f lavfi -i "smptebars=size=176x144:rate=25:duration=0.8" -c:v libtheora -q:v 4 -an theora-bars.ogv
+for f in theora theora-q2 theora-q9 theora-odd theora-320 theora-bars theora-av; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.ogv" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done

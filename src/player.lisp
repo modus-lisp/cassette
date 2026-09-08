@@ -30,6 +30,7 @@
   mpeg2                                         ; reel.mpeg2 decoder state or NIL
   mpeg4                                         ; reel.mpeg4 decoder state or NIL
   ffv1                                          ; reel.ffv1 decoder state or NIL
+  theora                                        ; reel.theora decoder state or NIL
   ;; MPEG video pictures decoded ahead, in display order, and the presentation times still unclaimed
   (mpeg2-ready '())
   (mpeg2-stamps '())
@@ -48,7 +49,8 @@
   (eof nil))
 
 (defun %decodable-video-p (codec)
-  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP" "V_FFV1")
+  (member codec '("V_VP8" "V_MPEG4/ISO/AVC" "V_MPEG1" "V_MPEG2" "V_MPEG4/ISO/ASP" "V_FFV1"
+                  "V_THEORA")
           :test #'equal))
 
 (defun %vfw-codec (private)
@@ -95,7 +97,7 @@
            (at (and audio (cond (mp4p (mp4-audio-track c)) (avip (avi-audio-track c))
                                 (oggp (ogg-audio-track c)) (sysp (mpegsys-audio-track c))
                                 (t (webm-audio-track c)))))
-           (unsupported '()) (note nil) (h264 nil) (ffv1 nil))
+           (unsupported '()) (note nil) (h264 nil) (ffv1 nil) (theora nil))
       ;; a VFW-wrapped Matroska track names its codec inside the envelope
       (when (and vt (equal (track-codec-id vt) "V_MS/VFW/FOURCC"))
         (multiple-value-bind (codec extra) (%vfw-codec (track-codec-private vt))
@@ -135,6 +137,20 @@
           (error (e)
             (push (track-codec-id vt) unsupported)
             (setf note (princ-to-string e) vt nil ffv1 nil))))
+      ;; Theora's configuration is three PACKETS at the head of its Ogg stream rather than a blob
+      ;; in a track header, so it is built from the stream and not from CodecPrivate.  Doing it here
+      ;; means a stream this cannot decode — an old bitstream, a chroma layout other than 4:2:0 —
+      ;; is found out when the file is opened, and the audio still plays.
+      (when (and vt (equal (track-codec-id vt) "V_THEORA"))
+        (handler-case
+            (let* ((st (ogg-stream-for c vt))
+                   (headers (mapcar (lambda (h) (coerce h '(simple-array (unsigned-byte 8) (*))))
+                                    (os-headers st))))
+              (setf theora (reel.theora:make-theora-decoder
+                            (reel.theora:parse-headers headers))))
+          (error (e)
+            (push (track-codec-id vt) unsupported)
+            (setf note (princ-to-string e) vt nil theora nil))))
       (when (and at (not (%decodable-audio-p (track-codec-id at))))
         (push (track-codec-id at) unsupported)
         (setf at nil))
@@ -158,6 +174,7 @@
        :mpeg4 (and vt (equal (track-codec-id vt) "V_MPEG4/ISO/ASP")
                    (reel.mpeg4:make-decoder))
        :ffv1 (and vt (equal (track-codec-id vt) "V_FFV1") ffv1)
+       :theora (and vt (equal (track-codec-id vt) "V_THEORA") theora)
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
@@ -411,6 +428,17 @@
                                                    '(simple-array (unsigned-byte 8) (*)))))
                (out (reel.ffv1:as-picture fr)))
           (setf (picture-timestamp out) (frame-timestamp f scale))
+          (return-from next-video-frame out))))
+    ;; Theora, like FFV1, hands out one picture per packet in order: it has no B pictures and no
+    ;; reordering, so the packet's own timestamp is the picture's.
+    (when (player-theora p)
+      (let ((f (%next-frame-for p vt)))
+        (when (null f) (return-from next-video-frame nil))
+        (let* ((fr (reel.theora:decode-frame
+                    (player-theora p)
+                    (coerce (frame-data f) '(simple-array (unsigned-byte 8) (*)))))
+               (out (and fr (reel.theora:as-picture fr))))
+          (when out (setf (picture-timestamp out) (frame-timestamp f scale)))
           (return-from next-video-frame out))))
     ;; MPEG video goes through a queue for the same reason H.264 does, and it is worth saying
     ;; plainly: ONE ACCESS UNIT IS NOT ONE PICTURE OUT.  A decoder holds each reference picture back

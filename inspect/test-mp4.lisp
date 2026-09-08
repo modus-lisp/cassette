@@ -146,12 +146,19 @@
                (null (cassette:player-unsupported p)))))
   (error (e) (ok (format nil "Opus in Ogg: ~a" e) nil)))
 
+;; This was a refusal test until Theora landed.  It is kept, inverted: the demuxer's job here is
+;; to hand the codec its three header packets and then its frames, and the check that it does is
+;; that a picture comes back at the size the identification header claimed.
 (handler-case
-    (let ((p (cassette:open-media "vectors/theora.ogv" :audio nil)))
-      (ok "a Theora track is named as undecodable rather than guessed at"
-          (and (null (cassette:player-video-track p))
-               (member "V_THEORA" (cassette:player-unsupported p) :test #'equal))))
-  (error (e) (ok (format nil "Theora refusal: ~a" e) nil)))
+    (let* ((p (cassette:open-media "vectors/theora.ogv" :audio nil))
+           (pic (cassette:next-video-frame p)))
+      (ok "a Theora track opens and its first picture is the size the header claims"
+          (and (cassette:player-video-track p)
+               (null (cassette:player-unsupported p))
+               pic
+               (= 176 (reel.decode:picture-width pic))
+               (= 144 (reel.decode:picture-height pic)))))
+  (error (e) (ok (format nil "Theora in Ogg: ~a" e) nil)))
 
 (format t "~&~a~%" (if (zerop *fails*) "MP4 DEMUX OK" (format nil "MP4 DEMUX: ~d FAILED" *fails*)))
 (sb-ext:exit :code (if (zerop *fails*) 0 1))
