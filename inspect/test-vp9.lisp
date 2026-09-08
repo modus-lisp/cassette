@@ -188,6 +188,50 @@
 (check-tiles "vp9-720")      ; four tile columns, so the tile length fields are exercised too
 (check-tiles "vp9-switch")
 
+(format t "~&== VP9 reconstruction, where a picture can finally be compared~%")
+
+;;; A LOSSLESS ENCODE IS THE ONE CASE THAT CAN BE COMPARED BEFORE THE LOOP FILTER EXISTS, because a
+;;; lossless frame has a filter level of zero and so ffmpeg's own output is unfiltered too.  It also
+;;; happens to exercise the path nothing else does: a lossless block uses the Walsh-Hadamard, which
+;;; is exact where the DCT is not, and scans as if 4x4 whatever its size says.
+;;;
+;;; What this proves is everything below the filter: the partition walk, every block mode, every
+;;; coefficient, the edge-sample gathering with all its substitutions, the fifteen intra predictors,
+;;; and the crop on the way out.
+
+(handler-case
+    (let* ((m (cassette:parse-webm (slurp "vectors/vp9-lossless.webm")))
+           (vt (cassette:webm-video-track m))
+           (r (cassette:make-block-reader m))
+           (ctxs (let ((v (make-array 4)))
+                   (dotimes (i 4 v) (setf (aref v i) (reel.vp9:make-default-context)))))
+           (want (slurp "vectors/vp9-lossless.yuv"))
+           (done nil))
+      (loop for f = (cassette:read-next-frame r) while (and f (not done))
+            do (when (eq (cassette:frame-track f) vt)
+                 (let ((data (coerce (cassette:frame-data f)
+                                     '(simple-array (unsigned-byte 8) (*)))))
+                   (dolist (part (reel.vp9:split-superframe data))
+                     (let ((h (reel.vp9:parse-header data (car part) (cdr part))))
+                       (when (and (not (reel.vp9:h-show-existing h)) (reel.vp9:h-keyframe h) (not done))
+                         (let* ((hb (+ (car part) (reel.vp9:h-header-bytes h)))
+                                (fp (reel.vp9:read-compressed-header
+                                     data hb (reel.vp9:h-compressed-size h) h
+                                     (aref ctxs (reel.vp9:h-frame-context h))))
+                                (st (reel.vp9:make-state h fp)))
+                           (reel.vp9:decode-tiles
+                            data (+ hb (reel.vp9:h-compressed-size h)) (cdr part) st)
+                           (let ((y (reel.vp9:picture->yuv420 (reel.vp9:st-frame st)))
+                                 (bad 0))
+                             (dotimes (k (length y))
+                               (unless (= (aref y k) (aref want k)) (incf bad)))
+                             (ok (format nil "a lossless key frame is bit-exact (~d samples)"
+                                         (length y))
+                                 (zerop bad)))
+                           (setf done t))))))))
+      (unless done (ok "a lossless key frame was found to decode" nil)))
+  (error (e) (ok (format nil "lossless reconstruction: ~a" e) nil)))
+
 (format t "~&== superframes~%")
 (handler-case
     (let* ((m (cassette:parse-webm (slurp "vectors/vp9-cif.webm")))

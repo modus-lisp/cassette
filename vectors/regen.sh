@@ -297,3 +297,10 @@ done
 #   ffmpeg -f lavfi -i "testsrc2=size=352x288:rate=25:duration=1.6" \
 #          -c:v libvpx-vp9 -crf 20 -b:v 0 -cpu-used 0 -auto-alt-ref 1 -lag-in-frames 16 \
 #          vp9-switch.webm   # slow enough to reach TX_SWITCHABLE, which sends transform probs
+#   ffmpeg -f lavfi -i "testsrc2=size=176x144:rate=25:duration=0.4" \
+#          -c:v libvpx-vp9 -lossless 1 -cpu-used 4 vp9-lossless.webm
+#          # a lossless frame's loop filter level is zero, which is the only way to compare a
+#          # decoded picture against ffmpeg's before the filter is implemented
+for f in vp9-lossless; do
+  ffmpeg -hide_banner -loglevel error -y -i "$f.webm" -f rawvideo -pix_fmt yuv420p "$f.yuv"
+done
