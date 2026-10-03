@@ -13,8 +13,6 @@
 ;;;; reported — PLAYER-UNSUPPORTED says which codec it was — and the other track still plays.
 (in-package #:cassette)
 
-(defvar *%vorbis-dec* nil
-  "Scratch between OPEN-MEDIA's header work and the MAKE-WEBM-PLAYER call that consumes it.")
 
 (defstruct (webm-player (:conc-name player-))
   (kind :webm)                                  ; :webm or :mp4
@@ -104,7 +102,7 @@
            (at (and audio (cond (mp4p (mp4-audio-track c)) (avip (avi-audio-track c))
                                 (oggp (ogg-audio-track c)) (sysp (mpegsys-audio-track c))
                                 (t (webm-audio-track c)))))
-           (unsupported '()) (note nil) (h264 nil) (ffv1 nil) (theora nil))
+           (unsupported '()) (note nil) (h264 nil) (ffv1 nil) (theora nil) (vorbis-dec nil))
       ;; a VFW-wrapped Matroska track names its codec inside the envelope
       (when (and vt (equal (track-codec-id vt) "V_MS/VFW/FOURCC"))
         (multiple-value-bind (codec extra) (%vfw-codec (track-codec-private vt))
@@ -168,7 +166,10 @@
       ;; are the head of its own logical stream, and from Matroska they are Xiph-laced into
       ;; CodecPrivate.  Building it here means a stream this cannot decode is found out when the
       ;; file is opened, and the video still plays.
-      (let ((vorbis-dec nil))
+      ;; A LOCAL, beside H264/FFV1/THEORA -- it used to reach MAKE-WEBM-PLAYER through a global,
+      ;; which a player opened on a decoding thread then wrote with that thread's own decoder
+      ;; (on modus, a store the shared-store guard refuses: every Vorbis file failed to open).
+      (progn
         (when (and at (equal (track-codec-id at) "A_VORBIS"))
           (handler-case
               (let ((headers
@@ -188,8 +189,7 @@
           (setf at nil))
         (when (and at (not (%decodable-audio-p (track-codec-id at))))
           (push (track-codec-id at) unsupported)
-          (setf at nil))
-        (setf *%vorbis-dec* vorbis-dec))
+          (setf at nil)))
       (make-webm-player
        :kind (cond (mp4p :mp4) (avip :avi) (oggp :ogg) (sysp :mpegsys) (t :webm))
        :webm c
@@ -215,7 +215,7 @@
        :nal-length (or (and vt (%avcc-nal-length (track-codec-private vt))) 4)
        :opus (and at (equal (track-codec-id at) "A_OPUS")
                   (reed:make-opus-decoder :channels (track-channels at)))
-       :vorbis (and at (equal (track-codec-id at) "A_VORBIS") *%vorbis-dec*)
+       :vorbis (and at (equal (track-codec-id at) "A_VORBIS") vorbis-dec)
        ;; Matroska keeps the native FLAC header — `fLaC' and its metadata blocks — in
        ;; CodecPrivate, so the same parser that reads a .flac file reads it here.
        ;; AC-3 frames are self-describing, so the track carries no configuration at all
