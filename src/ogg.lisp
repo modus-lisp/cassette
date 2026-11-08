@@ -268,6 +268,19 @@
           (t nil))))
     (%make-ogg-reader :ogg o :frames (mapcar #'cdr (stable-sort (nreverse frames) #'< :key #'car)))))
 
+(defun ogg-duration-seconds (o)
+  "The audio stream's length, from its last granule position (samples, for Opus and Vorbis), or
+   NIL.  Ogg has no duration field; the granule is the nearest thing, and it is in every page.
+   An unset granule (-1, all ones) is not a position."
+  (let ((at (ogg-audio-track o)))
+    (when at
+      (let* ((st (ogg-stream-for o at))
+             (g (loop for pk in (os-packets st)
+                      for gr = (cdr pk)
+                      when (and (integerp gr) (< -1 gr (ash 1 62))) maximize gr))
+             (rate (if (equal (os-codec st) "A_OPUS") 48000 (or (track-sample-rate at) 0))))
+        (and g (plusp g) (plusp rate) (/ g (float rate 1d0)))))))
+
 (defun read-next-ogg-frame (r) (pop (ogr-frames r)))
 
 (defconstant +ogg-tick+ 1000 "Nanoseconds per Ogg timestamp unit: these are counted in microseconds.")

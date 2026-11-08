@@ -285,9 +285,10 @@
 (defun player-duration (p)
   "Duration in seconds (double) or NIL."
   (let ((c (player-webm p)))
-    (if (eq (player-kind p) :mp4)
-        (mp4-duration c)
-        (and (webm-duration c) (/ (* (webm-duration c) (webm-timecode-scale c)) 1d9)))))
+    (case (player-kind p)
+      (:mp4 (mp4-duration c))
+      (:ogg (ogg-duration-seconds c))
+      (t (and (webm-duration c) (/ (* (webm-duration c) (webm-timecode-scale c)) 1d9))))))
 
 (defun player-frame-rate (p)
   "Nominal video frame rate from DefaultDuration, or NIL."
